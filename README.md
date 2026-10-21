@@ -37,9 +37,25 @@ desktop environment.
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
   `PDA_GPS_LAT`/`PDA_GPS_LON` to force a position, `PDA_GPS_DEMO=1` for a slow
-  drift without hardware).
+  drift without hardware). The *Other* panel shows the live GPS state.
 - **Mouse wheel zooms towards the cursor** (the world point under the pointer
   stays under the pointer); the +/- buttons zoom around the middle of the view.
+
+### GPS on the Pi
+
+The app talks to **gpsd**'s NMEA socket (`127.0.0.1:2947`) and nothing else:
+
+```bash
+sudo apt install gpsd
+# USB module:
+sudo gpsd -F /dev/ttyUSB0
+# UART module (BN-880 on the 40-pin header): enable the serial port in
+# raspi-config (Interface Options -> Serial Port), then:
+sudo gpsd -F /dev/serial0
+gpspipe -w          # should print $GNRMC lines
+```
+
+The first fix needs a clear sky and can take a few minutes.
 
 ## Build
 

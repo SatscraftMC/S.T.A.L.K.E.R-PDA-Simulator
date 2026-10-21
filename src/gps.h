@@ -25,5 +25,6 @@ typedef struct {
 void gps_init(gps_fix_t * fix);
 void gps_poll(gps_fix_t * fix);
 const char * gps_status(const gps_fix_t * fix);
+bool gps_daemon_seen(void);   /* true once gpsd has sent us something */
 
 #endif

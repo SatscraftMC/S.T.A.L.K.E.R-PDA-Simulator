@@ -14,6 +14,7 @@
 #define GPSD_PORT 2947
 
 static int s_sock = -1;
+static bool s_daemon_seen = false;   /* gpsd answered at least once */
 static bool s_demo = false;
 static bool s_env_pos = false;
 static double s_demo_lat = 32.6478;    /* Funchal */
@@ -113,6 +114,11 @@ static void gpsd_connect(void)
     s_sock = fd;
 }
 
+bool gps_daemon_seen(void)
+{
+    return s_daemon_seen;
+}
+
 void gps_init(gps_fix_t * fix)
 {
     memset(fix, 0, sizeof(*fix));
@@ -159,8 +165,16 @@ void gps_poll(gps_fix_t * fix)
     char buf[1024];
     ssize_t n = read(s_sock, buf, sizeof(buf) - 1);
     if(getenv("PDA_DEBUG")) fprintf(stderr, "[gps] read -> %zd (sock %d)\n", n, s_sock);
-    if(n <= 0) return;
+    if(n == 0) {
+        /* gpsd closed the connection (it restarts on the Pi) - drop it and
+           reconnect on the next poll */
+        close(s_sock);
+        s_sock = -1;
+        return;
+    }
+    if(n < 0) return;                 /* EAGAIN: nothing new yet */
     buf[n] = 0;
+    s_daemon_seen = true;
 
     char * save = NULL;
     for(char * line = strtok_r(buf, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
@@ -181,7 +195,9 @@ void gps_poll(gps_fix_t * fix)
 const char * gps_status(const gps_fix_t * fix)
 {
     static char buf[64];
-    if(!fix->valid) snprintf(buf, sizeof(buf), "GPS: no fix");
+    if(!fix->valid && !fix->simulated && !gps_daemon_seen())
+        snprintf(buf, sizeof(buf), "GPS: gpsd not found");
+    else if(!fix->valid) snprintf(buf, sizeof(buf), "GPS: no fix");
     else if(fix->simulated) snprintf(buf, sizeof(buf), "GPS: simulated");
     else snprintf(buf, sizeof(buf), "GPS: %d sats, %.1f m/s", fix->sats, fix->speed);
     return buf;
