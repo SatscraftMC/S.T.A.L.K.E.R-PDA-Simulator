@@ -1,0 +1,12 @@
+build/
+pda-theme.cfg
+compile_commands.json
+third_party/lvgl/
+tools/rgb565_pack
+tools/__pycache__/
+
+# map imagery: everything is committed, except the two levels that exceed
+# GitHub's 100 MB per-file limit - those are stored as .part files instead
+# (tools/fetch_deps.sh reassembles them).
+assets/maps/madeira-island/z14.rgb565
+assets/maps/funchal/z17.rgb565
