@@ -64,6 +64,11 @@
 #define FIELD_W      220
 #define FIELD_H      17
 #define VAL_X        150
+#define VAL_PAD      5      /* where a value's text starts: the same place the
+                               text of a field starts inside its box (the box's
+                               border is 1px and its padding 4px) */
+#define VAL_Y        3      /* the value sits on the row's baseline, with the
+                               name on the left */
 #define BACK_W       800
 #define BACK_H       452
 
@@ -194,7 +199,7 @@ static lv_obj_t * row(lv_obj_t * parent, const char * name)
 {
     lv_obj_t * r = plain(parent, lv_pct(100), ROW_H);
     lv_obj_set_flex_grow(r, 0);
-    label(r, 0, 3, 150, name, &pda_font_mono_10, PDA_MSG_SYS);
+    label(r, 0, VAL_Y, 150, name, &pda_font_mono_10, PDA_MSG_SYS);
     /* the hairline between the rows */
     grit_rule(r, 0, ROW_H - 1, lv_pct(100), false, PDA_RULE);
     return r;
@@ -202,7 +207,9 @@ static lv_obj_t * row(lv_obj_t * parent, const char * name)
 
 static lv_obj_t * value(lv_obj_t * r, const char * text, uint32_t color)
 {
-    lv_obj_t * v = label(r, VAL_X, 1, 290, text, &pda_font_mono_10, color);
+    /* the text starts inside the value column, on the row's baseline - the
+       same place the text of a field starts inside its box */
+    lv_obj_t * v = label(r, VAL_X + VAL_PAD, VAL_Y, 280, text, &pda_font_mono_10, color);
     return v;
 }
 
@@ -251,8 +258,10 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
     /* a little more room on the left: the letters have a bearing of their
-       own and the first one was cut in half by the edge of the field */
-    lv_obj_set_style_pad_left(ta, 4, LV_PART_MAIN);
+       own and the first one was cut in half by the edge of the field.
+       The box's border is 1px, so this puts the text of the field exactly
+       where a plain value starts - one VAL_PAD inside the column. */
+    lv_obj_set_style_pad_left(ta, VAL_PAD - 1, LV_PART_MAIN);
     lv_cursor_only_when_focused(ta);
     return ta;
 }
@@ -605,7 +614,7 @@ static lv_obj_t * cycle_row(lv_obj_t * parent, const char * name, const char * k
     lv_obj_set_style_outline_width(btn, 0, LV_PART_MAIN);
     lv_no_transition(btn);
 
-    lv_obj_t * lbl = label(btn, 0, 0, 0, labels[idx], &pda_font_mono_10, PDA_MSG_TEXT);
+    lv_obj_t * lbl = label(btn, VAL_PAD, VAL_Y, 0, labels[idx], &pda_font_mono_10, PDA_MSG_TEXT);
     lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
 
     cycle_t * c = &g_cycle[g_n_cycle];
@@ -757,7 +766,7 @@ static void toggle_row(lv_obj_t * parent, const char * name, const char * key)
     lv_obj_t * r = row(parent, name);
     bool on = prefs_bool(key, true);
     lv_obj_t * b = toggle(r, on);
-    lv_obj_set_pos(b, VAL_X, 2);
+    lv_obj_set_pos(b, VAL_X, 1);
     lv_obj_add_event_cb(b, on_toggle_click, LV_EVENT_CLICKED,
                         (void *)(lv_intptr_t)(g_ui.n_tog));
     if(g_ui.n_tog < 4) {
