@@ -84,6 +84,9 @@ const char * chat_identity(void);
 void chat_set_identity(const char * name);
 void chat_set_room(const char * room);
 
+/* how many peers the fips daemon knows about */
+int chat_fips_peer_count(void);
+
 /* Build the wire envelope for a message. */
 void chat_envelope(char * out, size_t outn, const char * id, const char * sender,
                    const char * text, long ts);

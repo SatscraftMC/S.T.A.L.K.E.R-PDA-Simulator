@@ -551,6 +551,13 @@ void other_ui_refresh(void)
             bool seen = gps_daemon_seen();
             set_live(i, seen ? "gpsd" : "none", seen ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
         }
+        else if(!strcmp(key, "fips_peers")) {
+            char b[24];
+            int n = chat_fips_peer_count();
+            if(n > 0) snprintf(b, sizeof(b), "%d", n);
+            else snprintf(b, sizeof(b), "-");
+            set_live(i, b, n > 0 ? PDA_MSG_TEXT : PDA_MSG_SYS);
+        }
         else if(!strcmp(key, "sys_version")) set_live(i, s_version, PDA_MSG_TEXT);
         else if(!strcmp(key, "sys_gps")) set_live(i, s_gps, PDA_MSG_TEXT);
     }

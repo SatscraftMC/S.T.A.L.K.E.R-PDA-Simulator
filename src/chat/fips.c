@@ -79,6 +79,7 @@ typedef struct {
     int out_head, out_count;
 
     time_t last_peers;
+    int peer_count;
 } fips_t;
 
 static fips_t s_fips;
@@ -429,6 +430,9 @@ static void refresh_peers(void)
 
     char npubs[FIPS_MAX_PEERS][96];
     int n = extract_peers(reply, npubs, FIPS_MAX_PEERS);
+    pthread_mutex_lock(&s_fips.lock);
+    s_fips.peer_count = n;
+    pthread_mutex_unlock(&s_fips.lock);
     if(n <= 0) return;
 
     /* open a flow to every peer we do not have one for yet */
@@ -638,6 +642,15 @@ static bool fips_send(chat_transport_t * t, const char * text, const char * id)
     }
     pthread_mutex_unlock(&s_fips.lock);
     return true;
+}
+
+/* how many peers the daemon knows about */
+int chat_fips_peer_count(void)
+{
+    pthread_mutex_lock(&s_fips.lock);
+    int n = s_fips.peer_count;
+    pthread_mutex_unlock(&s_fips.lock);
+    return n;
 }
 
 void chat_fips_register(void)
