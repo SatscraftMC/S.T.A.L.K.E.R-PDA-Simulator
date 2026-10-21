@@ -77,9 +77,12 @@ const chat_msg_t * chat_newest(void);
 void chat_deliver(int transport, const char * id, const char * sender,
                   const char * text);
 void chat_system(const char * text);
-
-int  chat_unread(void);
+int chat_unread(void);
 void chat_reset_unread(void);
+
+/* empty the log */
+void chat_clear(void);
+
 
 int chat_transport_count(void);
 const chat_transport_t * chat_transport_get(int i);

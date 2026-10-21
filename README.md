@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.1.0-alpha**
+**v0.1.1-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -17,6 +17,8 @@ on a desktop environment.
 | **The map** - real Esri satellite imagery of Madeira, 27 named places, 16 zoom steps from the whole archipelago down to about a metre per pixel. Drag to pan, wheel or buttons to zoom. | **The room** - one chat, every carrier. What you type goes out on the local mesh, the FIPS mesh and the internet at once; everything that comes in lands in the same log, tagged with the carrier it arrived on. |
 | ![connections](docs/screenshots/other-connections.png) | ![the user page](docs/screenshots/other-user.png) |
 | **Connections** - what is up and what each system is set to. | **User** - the name other devices see, the room, and what the message log shows. |
+| ![the settings](docs/screenshots/other-settings.png) | |
+| **Settings** - the device's own settings: the clock, the units, the language, the colour scheme. Every one of them works. | |
 
 ## Features
 
@@ -91,22 +93,33 @@ and they hear each other.
 A column of sections on the left (Settings, Connections, User, Extras), a
 strip of sub-tabs across the top of the pane, the page below that. The
 sub-tabs belong to the section: *Settings* has General / Advanced / Language /
-Themes, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS / System.
+Themes / System, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS.
 
 **Connections → Info** is the one that matters: it says whether each system
-is up - **green** when it is, **grey** while it is trying and **red** when it
-is not there. The other *Connections* pages show the settings of that system
+is up - **green** when it is, **grey** while it is trying and **red** when
+it is not there. The other *Connections* pages show the settings of that system
 (the mesh channel, port and bridge, the fips sockets and the FSP port, the
-WiFi interface and its address, the live GPS data, the version and where the
-settings file lives).
+WiFi interface and its address, the live GPS data).
 
 **User** holds the personalisation: the name other devices see on your
 messages and the room you talk in (both editable, both remembered), and the
 switches for what the message log shows. The carrier badges in the top right
 of the Messages tab use the same colours: green, grey, red.
 
+**Settings** holds the device's own settings - every one of them works, and
+clicking a value steps through its choices:
+
+| page | what it does |
+|---|---|
+| General | the device name, 24 or 12 hour clock, metric or imperial units, the screen the device opens on |
+| Advanced | how often the GPS is looked at (1/2/5/10 s), how often the log is (200/500/1000 ms), and a button that empties the log |
+| Language | English or Deutsch (the tab bar, the menus and the buttons), the time zone (Local / UTC / Lisbon) and the region's number format (1.234.5 or 1.234,5) |
+| Themes | the colour scheme (Wasteland / Ash / Rust), the accent colour (Amber / Green / Blue) and the grain (the texture on the panels) on or off |
+| System | the version, the GPS state, the screen, the carriers, the language, the theme and where the settings file lives |
+
 The settings are remembered in `~/.config/pda/prefs.conf` (override with
 `PDA_PREFS`), so they survive a restart.
+
 
 ## Environment
 
@@ -227,10 +240,11 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 
 Phase 3 (the map screen) is functional, the Messages tab is a real group
 chat over three carriers, and the Other tab is the settings/connections/user
-panel. Still to come: wallet/QR payments, camera, radio, real navigation
-stack, input abstraction (sim -> GPIO/evdev), and the Pi port (DRM/KMS +
-systemd boot-to-app). The *Settings* and *Extras* pages of the Other tab are
-placeholders.
+panel - and every setting in it works. Still to come: wallet/QR payments,
+camera, radio, real navigation stack, input abstraction (sim -> GPIO/evdev),
+and the Pi port (DRM/KMS + systemd boot-to-app). The *Extras* page of the
+Other tab is still empty, and the pages' contents are still English even when
+the language is set to Deutsch.
 
 ## License
 

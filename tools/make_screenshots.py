@@ -83,6 +83,8 @@ def main():
         "other-fips.png")
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2", "PDA_OTHER_SUB": "0"},
         "other-user.png")
+    run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "0"},
+        "other-settings.png")
 
     # the messages tab, with a conversation on it
     port = free_port()

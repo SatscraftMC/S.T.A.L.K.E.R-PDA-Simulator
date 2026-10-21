@@ -185,6 +185,14 @@ void chat_reset_unread(void)
     s_unread = 0;
 }
 
+/* empty the log (the Advanced page's "Reset log") */
+void chat_clear(void)
+{
+    s_head = 0;
+    s_count = 0;
+    s_unread = 0;
+}
+
 static bool seen_before(const char * id, const char * sender, const char * text)
 {
     time_t now = time(NULL);

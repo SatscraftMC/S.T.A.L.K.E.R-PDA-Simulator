@@ -3,6 +3,9 @@
 #include "ui/chat_ui.h"
 #include "ui/other_ui.h"
 #include "ui/prefs.h"
+#include "ui/i18n.h"
+#include "ui/format.h"
+#include "ui/grit.h"
 #include "assets/fonts/pda_fonts.h"
 #include "gps.h"
 #include "chat/chat.h"
@@ -49,12 +52,26 @@
 #define TAB_SLANT   13
 
 
-static const char * const g_sub_names[SUB_COUNT] = {
-    "Task list", "Stashes", "Areas", "Secondary tasks", "Important objects"
+static const tr_id_t g_layer_ids[SUB_COUNT] = {
+    TR_LAYER_TASK, TR_LAYER_STASH, TR_LAYER_AREA, TR_LAYER_SECOND, TR_LAYER_IMPORT
 };
 
-static const char * const g_tab_names[TAB_COUNT] = {
-    "Area map", "Messages", "Contacts", "Radio", "Camera", "Wallet", "Other"
+static const tr_id_t g_tab_ids[TAB_COUNT] = {
+    TR_TAB_MAP, TR_TAB_MSG, TR_TAB_CONTACTS, TR_TAB_RADIO, TR_TAB_CAMERA,
+    TR_TAB_WALLET, TR_TAB_OTHER
+};
+
+/* the tabs that are still stubs */
+static const char * const g_panel_titles[TAB_COUNT - 1] = {
+    "Messages", "Contacts", "Radio", "Camera", "Wallet", "Other"
+};
+static const char * const g_panel_bodies[TAB_COUNT - 1] = {
+    "No new messages.",
+    "No contacts yet.",
+    "Signal: none",
+    "No camera feed yet.",
+    "Balance: 0 sats",
+    "Nothing to tune yet."
 };
 
 typedef struct {
@@ -63,7 +80,7 @@ typedef struct {
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
 
-#define PDA_VERSION   "v0.1.0-alpha"
+#define PDA_VERSION   "v0.1.1-alpha"
 
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
@@ -91,6 +108,7 @@ typedef struct {
 
 typedef struct {
     lv_obj_t * root;
+    lv_group_t * group;
     lv_obj_t * header;
     lv_obj_t * canvas;
     lv_obj_t * clock_lbl;
@@ -103,7 +121,9 @@ typedef struct {
     lv_obj_t * map;
     lv_obj_t * map_canvas;
     lv_obj_t * overlay;
+    lv_obj_t * zoom_btn[3];
     lv_obj_t * pack_lbl;
+    lv_timer_t * gps_timer;
     map_pack_t packs[MAX_PACKS];
     int n_packs;
     int active_pack;
@@ -249,8 +269,8 @@ static void redraw_header(void)
         }
     }
 
-    stroke_rect(708, 13, 26, 11, argb_hex(PDA_BATTERY));
-    fill_rect(710, 15, 18, 7, argb_hex(PDA_BATTERY_FILL));
+    stroke_rect(696, 13, 26, 11, argb_hex(PDA_BATTERY));
+    fill_rect(698, 15, 18, 7, argb_hex(PDA_BATTERY_FILL));
 
     if(sh->focus_tab >= 0) {
         int ox = TAB_X0 + sh->focus_tab * TAB_PITCH;
@@ -307,19 +327,44 @@ static void update_unread(void)
 
 static void update_title(shell_t * sh)
 {
-    lv_label_set_text(sh->title_lbl, g_tab_names[sh->active_tab]);
+    lv_label_set_text(sh->title_lbl, tr(g_tab_ids[sh->active_tab]));
 }
 
-/* ---------- clock ---------- */
+/* the language changed: the words of the tab bar are put back */
+static void reload_text(void)
+{
+    shell_t * sh = &g_sh;
+    for(int i = 0; i < TAB_COUNT; i++)
+        if(sh->tab_lbls[i]) lv_label_set_text(sh->tab_lbls[i], tr(g_tab_ids[i]));
+    for(int i = 0; i < SUB_COUNT; i++)
+        if(sh->sub_lbls[i]) lv_label_set_text(sh->sub_lbls[i], tr(g_layer_ids[i]));
+    update_title(sh);
+}
+
+/* the theme changed: the overlay's buttons wear the new colours */
+static void restyle_overlay(void)
+{
+    shell_t * sh = &g_sh;
+    for(int i = 0; i < 3; i++) {
+        lv_obj_t * b = sh->zoom_btn[i];
+        if(!b) continue;
+        lv_obj_set_style_bg_color(b, lv_color_hex(PDA_ZOOM_BG), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_color(b, lv_color_hex(PDA_ZOOM_BORDER), LV_PART_MAIN);
+        lv_obj_set_style_text_color(b, lv_color_hex(PDA_TEXT), LV_PART_MAIN);
+    }
+    if(sh->pack_lbl)
+        lv_obj_set_style_text_color(sh->pack_lbl, lv_color_hex(PDA_SUB_DOT_OFF),
+                                    LV_PART_MAIN);
+}
+
+/* ---------- the clock ---------- */
 
 static void update_clock(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
-    time_t t = time(NULL);
-    struct tm lt;
-    localtime_r(&t, &lt);
-    char buf[8];
-    strftime(buf, sizeof(buf), "%H:%M", &lt);
+    char buf[16];
+    fmt_clock(time(NULL), buf, sizeof(buf));
     if(getenv("PDA_DEBUG")) fprintf(stderr, "[clock] %s\n", buf);
     lv_label_set_text(g_sh.clock_lbl, buf);
 }
@@ -455,7 +500,7 @@ static void build_header(shell_t * sh, lv_obj_t * parent, lv_group_t * group)
 
     for(int i = 0; i < TAB_COUNT; i++) {
         lv_obj_t * lbl = lv_label_create(header);
-        lv_label_set_text(lbl, g_tab_names[i]);
+        lv_label_set_text(lbl, tr(g_tab_ids[i]));
         lv_obj_set_pos(lbl, TAB_X0 + i * TAB_PITCH, TAB_Y0 + 4);
         lv_obj_set_width(lbl, TAB_W);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
@@ -470,7 +515,7 @@ static void build_header(shell_t * sh, lv_obj_t * parent, lv_group_t * group)
 
     for(int i = 0; i < SUB_COUNT; i++) {
         lv_obj_t * lbl = lv_label_create(header);
-        lv_label_set_text(lbl, g_sub_names[i]);
+        lv_label_set_text(lbl, tr(g_layer_ids[i]));
         if(i == 0) {
             lv_obj_set_pos(lbl, SUB_TAG_X, SUB_Y0 + 2);
             lv_obj_set_width(lbl, SUB_TAG_W);
@@ -497,19 +542,21 @@ static void build_header(shell_t * sh, lv_obj_t * parent, lv_group_t * group)
     }
 
     sh->title_lbl = lv_label_create(header);
-    lv_label_set_text(sh->title_lbl, g_tab_names[0]);
+    lv_label_set_text(sh->title_lbl, tr(g_tab_ids[0]));
     lv_obj_set_pos(sh->title_lbl, 16, 18);
     lv_obj_set_style_text_font(sh->title_lbl, &pda_font_mono_10, LV_PART_MAIN);
 
     sh->clock_lbl = lv_label_create(header);
     lv_label_set_text(sh->clock_lbl, "00:00");
-    lv_obj_set_pos(sh->clock_lbl, 740, 14);
-    lv_obj_set_width(sh->clock_lbl, 46);
+    lv_obj_set_pos(sh->clock_lbl, 726, 14);
+    lv_obj_set_width(sh->clock_lbl, 72);
     lv_obj_set_style_text_align(sh->clock_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_text_font(sh->clock_lbl, &pda_font_mono_14, LV_PART_MAIN);
 
     lv_timer_create(update_clock, 1000, NULL);
-    lv_timer_create(update_gps, 1000, NULL);
+    int poll = atoi(prefs_str("gps_poll", "1000"));
+    if(poll < 200) poll = 1000;
+    sh->gps_timer = lv_timer_create(update_gps, poll, NULL);
 }
 
 /* ---------- map ---------- */
@@ -1183,6 +1230,8 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_add_event_cb(zout, on_zout, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t * zbtns[3] = { zin, zout, NULL };
+    sh->zoom_btn[0] = zin;
+    sh->zoom_btn[1] = zout;
 
     /* the recenter button: put the view back on the blue dot */
     draw_recenter_icon(sh->icon_buf, 28, 28);
@@ -1196,6 +1245,7 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_size(ico, 28, 28);
     lv_obj_add_event_cb(rc, on_recenter, LV_EVENT_CLICKED, NULL);
     zbtns[2] = rc;
+    sh->zoom_btn[2] = rc;
     for(int i = 0; i < 3; i++) {
         lv_obj_set_style_bg_color(zbtns[i], lv_color_hex(PDA_ZOOM_BG), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(zbtns[i], LV_OPA_COVER, LV_PART_MAIN);
@@ -1270,6 +1320,14 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     prefs_init();      /* the saved settings, before anything reads them */
     chat_init();
 
+    /* the settings that change how everything looks and reads */
+    pda_theme_load();
+    tr_load();
+    fmt_apply();
+    grit_set_grain(!strcmp(prefs_str("grain", "on"), "on"));
+
+    sh->group = group;
+
     lv_obj_set_style_bg_color(parent, lv_color_hex(PDA_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(parent, &pda_font_mono_14, LV_PART_MAIN);
@@ -1291,30 +1349,65 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
 
     build_map(sh, sh->view);
 
-    static const char * const titles[TAB_COUNT - 1] = {
-        "Messages", "Contacts", "Radio", "Camera", "Wallet", "Other"
-    };
-    static const char * const bodies[TAB_COUNT - 1] = {
-        "No new messages.",
-        "No contacts yet.",
-        "Signal: none",
-        "No camera feed yet.",
-        "Balance: 0 sats",
-        "Nothing to tune yet."
-    };
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, group);
-        else sh->panels[i] = build_panel(sh->view, titles[i], bodies[i]);
+        else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
     }
 
     redraw_header();
     restyle_labels();
     show_view(sh);
 
-    /* test hook: start on a given tab (PDA_START_TAB) */
+    /* the tab the device opens on: the test hook wins over the setting */
     const char * start_tab = getenv("PDA_START_TAB");
     if(start_tab && *start_tab) set_tab(sh, atoi(start_tab));
+    else {
+        int tab = atoi(prefs_str("start_tab", "0"));
+        if(tab < 0 || tab >= TAB_COUNT) tab = 0;
+        set_tab(sh, tab);
+    }
 
     return parent;
+}
+
+/* ---------- the theme and the language changed ---------- */
+
+/* the panels are built with the colours and the words, so they are built
+   again; the map and the header are painted again instead */
+void pda_shell_retheme(void)
+{
+    shell_t * sh = &g_sh;
+
+    redraw_header();
+    restyle_labels();
+    reload_text();
+    restyle_overlay();
+    map_update(sh);
+
+    int page = 0, sub = 0;
+    other_ui_get_state(&page, &sub);
+
+    for(int i = 0; i < TAB_COUNT - 1; i++) {
+        if(!sh->panels[i]) continue;
+        if(i == 0) chat_ui_destroy();
+        if(i == TAB_COUNT - 2) other_ui_destroy();
+        lv_obj_delete(sh->panels[i]);
+        sh->panels[i] = NULL;
+    }
+    for(int i = 0; i < TAB_COUNT - 1; i++) {
+        if(i == 0) sh->panels[i] = chat_ui_create(sh->view, sh->group);
+        else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, sh->group);
+        else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
+    }
+
+    other_ui_set_state(page, sub);
+    show_view(sh);
+}
+
+/* how often the GPS is looked at */
+void pda_shell_set_gps_poll(int ms)
+{
+    if(ms < 200) ms = 200;
+    if(g_sh.gps_timer) lv_timer_set_period(g_sh.gps_timer, ms);
 }

@@ -7,6 +7,24 @@
    a few stains and a vignette. It never changes, so it is drawn once into a
    canvas and left there. */
 
+/* every backdrop that was made, so the grain can be turned off and on */
+#define BACKDROPS_MAX 4
+static lv_obj_t * s_backdrops[BACKDROPS_MAX];
+static int s_n_backdrops = 0;
+static bool s_grain = true;
+
+void grit_set_grain(bool on)
+{
+    s_grain = on;
+    for(int i = 0; i < s_n_backdrops; i++)
+        if(s_backdrops[i]) lv_obj_set_hidden(s_backdrops[i], !on);
+}
+
+bool grit_grain(void)
+{
+    return s_grain;
+}
+
 static uint32_t s_rand = 0x1F123BB5u;
 
 static uint32_t rnd(void)
@@ -40,12 +58,28 @@ static lv_obj_t * inert(lv_obj_t * parent)
     return o;
 }
 
+/* a backdrop that goes away must not stay in the list */
+static void backdrop_gone(lv_event_t * e)
+{
+    lv_obj_t * c = lv_event_get_current_target(e);
+    for(int i = 0; i < s_n_backdrops; i++) {
+        if(s_backdrops[i] == c) {
+            s_backdrops[i] = NULL;
+            break;
+        }
+    }
+}
+
 lv_obj_t * grit_backdrop(lv_obj_t * parent, int w, int h)
 {
     if(w <= 0 || h <= 0) return NULL;
 
     uint16_t * buf = malloc((size_t)w * (size_t)h * sizeof(uint16_t));
     if(!buf) return NULL;
+
+    /* the surface takes the colour of the panel it lies under */
+    uint32_t base = PDA_PAGE_BG;
+    int br = (base >> 16) & 0xFF, bg = (base >> 8) & 0xFF, bb = base & 0xFF;
 
     /* a handful of stains: soft dark blotches */
     int sx[10], sy[10], sr[10], sd[10];
@@ -58,7 +92,7 @@ lv_obj_t * grit_backdrop(lv_obj_t * parent, int w, int h)
 
     for(int y = 0; y < h; y++) {
         for(int x = 0; x < w; x++) {
-            int r = 20, g = 22, b = 16;
+            int r = br, g = bg, b = bb;
 
             /* the grain */
             int n = (int)(rnd() % 9) - 4;
@@ -107,6 +141,9 @@ lv_obj_t * grit_backdrop(lv_obj_t * parent, int w, int h)
     lv_obj_set_pos(c, 0, 0);
     lv_obj_set_size(c, w, h);
     lv_obj_set_clickable(c, false);
+    lv_obj_set_hidden(c, !s_grain);
+    lv_obj_add_event_cb(c, backdrop_gone, LV_EVENT_DELETE, NULL);
+    if(s_n_backdrops < BACKDROPS_MAX) s_backdrops[s_n_backdrops++] = c;
     return c;
 }
 

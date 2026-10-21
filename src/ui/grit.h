@@ -9,6 +9,10 @@
 /* a dark, noisy surface: grain, scanlines, stains and a vignette */
 lv_obj_t * grit_backdrop(lv_obj_t * parent, int w, int h);
 
+/* the grain can be turned off (it is 700KB of memory on the Pi) */
+void grit_set_grain(bool on);
+bool grit_grain(void);
+
 /* a panel with a double border */
 lv_obj_t * grit_frame(lv_obj_t * parent, int x, int y, int w, int h, uint32_t color);
 

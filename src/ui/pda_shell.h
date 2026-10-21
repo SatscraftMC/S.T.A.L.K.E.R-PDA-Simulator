@@ -9,4 +9,11 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group);
    window coordinates, diff is the wheel delta (positive = scrolling up). */
 void pda_shell_wheel(int diff, int x, int y);
 
+/* The theme or the language changed: the panels are built with the colours
+   and the words, so they are built again. */
+void pda_shell_retheme(void);
+
+/* how often the GPS is looked at, in milliseconds */
+void pda_shell_set_gps_poll(int ms);
+
 #endif

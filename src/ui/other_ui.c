@@ -3,6 +3,10 @@
 #include "ui/prefs.h"
 #include "ui/lvutil.h"
 #include "ui/grit.h"
+#include "ui/i18n.h"
+#include "ui/format.h"
+#include "ui/pda_shell.h"
+#include "ui/chat_ui.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "gps.h"
@@ -63,15 +67,16 @@
 
 enum { PAGE_SETTINGS = 0, PAGE_CONNECTIONS = 1, PAGE_USER = 2, PAGE_EXTRAS = 3 };
 
-static const char * const g_page_names[PAGE_COUNT] = {
-    "Settings", "Connections", "User", "Extras"
+/* the sections and their sub tabs */
+static const tr_id_t g_page_ids[PAGE_COUNT] = {
+    TR_SEC_SETTINGS, TR_SEC_CONNECTIONS, TR_SEC_USER, TR_SEC_EXTRAS
 };
 
-static const char * const g_sub_names[PAGE_COUNT][8] = {
-    { "General", "Advanced", "Language", "Themes" },
-    { "Info", "Bitchat", "F.I.P.S", "WiFi", "GPS", "System" },
-    { NULL },
-    { NULL },
+static const tr_id_t g_sub_ids[PAGE_COUNT][8] = {
+    { TR_SUB_GENERAL, TR_SUB_ADVANCED, TR_SUB_LANGUAGE, TR_SUB_THEMES, TR_SUB_SYSTEM },
+    { TR_SUB_INFO, TR_SUB_BITCHAT, TR_SUB_FIPS, TR_SUB_WIFI, TR_SUB_GPS },
+    { 0 },
+    { 0 },
 };
 
 static void other_ui_refresh(void);
@@ -84,6 +89,7 @@ static void on_save_channel(lv_event_t * e);
 static void other_ui_on_channel(lv_event_t * e);
 static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb);
 static void on_toggle_click(lv_event_t * e);
+static void on_reset_log(lv_event_t * e);
 
 typedef struct {
     lv_obj_t * root;
@@ -95,6 +101,7 @@ typedef struct {
     int n_subs;
     lv_obj_t * content;
     lv_obj_t * strip_title;
+    lv_timer_t * timer;
     int page;
     int sub;
     int sec_no;            /* the headings alternate their colour */
@@ -417,13 +424,13 @@ static void page_gps(void)
     char buf[64];
 
     section(g_ui.content, "GPS");
-    snprintf(buf, sizeof(buf), "%.5f", g->lat);
+    fmt_coord(g->lat, buf, sizeof(buf));
     live_row(g_ui.content, "Latitude", "gps_lat", buf, PDA_MSG_TEXT);
-    snprintf(buf, sizeof(buf), "%.5f", g->lon);
+    fmt_coord(g->lon, buf, sizeof(buf));
     live_row(g_ui.content, "Longitude", "gps_lon", buf, PDA_MSG_TEXT);
     snprintf(buf, sizeof(buf), "%d", g->sats);
     live_row(g_ui.content, "Satellites", "gps_sats", buf, PDA_MSG_TEXT);
-    snprintf(buf, sizeof(buf), "%.1f m/s", g->speed);
+    fmt_speed(g->speed, buf, sizeof(buf));
     live_row(g_ui.content, "Speed", "gps_speed", buf, PDA_MSG_TEXT);
     live_row(g_ui.content, "Fix", "gps_fix",
              g->valid ? (g->simulated ? "SIMULATED" : "FIX") : "NO FIX",
@@ -441,23 +448,237 @@ static void page_system(void)
     live_row(g_ui.content, "Carriers", "sys_carriers",
              chat_transport_count() == 1 ? "1" : (chat_transport_count() == 2 ? "2" :
              (chat_transport_count() == 3 ? "3" : "?")), PDA_MSG_TEXT);
+    live_row(g_ui.content, "Language", "sys_lang", tr_lang_name(tr_lang()), PDA_MSG_TEXT);
+    live_row(g_ui.content, "Theme", "sys_theme", pda_scheme_name(pda_theme_scheme()),
+             PDA_MSG_TEXT);
     live_row(g_ui.content, "Settings file", "sys_prefs", prefs_path(), PDA_MSG_TEXT);
+}
+
+/* ---------- the settings that do something ---------- */
+
+/* a setting with a few choices: the value cycles when it is clicked */
+typedef void (*apply_fn)(const char * key);
+
+typedef struct {
+    const char * key;
+    const char * const * values;      /* what is saved */
+    const char * const * labels;      /* what is shown */
+    int n;
+    int index;
+    lv_obj_t * lbl;
+    apply_fn apply;
+} cycle_t;
+
+#define CYCLE_MAX 8
+static cycle_t g_cycle[CYCLE_MAX];
+static int g_n_cycle;
+
+static const char * const v_time[]   = { "24", "12" };
+static const char * const l_time[]   = { "24 hour", "12 hour" };
+static const char * const v_units[]  = { "metric", "imperial" };
+static const char * const l_units[]  = { "Metric (km/h)", "Imperial (mph)" };
+static const char * const v_start[]  = { "0", "1", "2", "3", "4", "5", "6" };
+static const char * const l_start[]  = { "Area map", "Messages", "Contacts", "Radio",
+                                         "Camera", "Wallet", "Other" };
+static const char * const v_gps[]    = { "1000", "2000", "5000", "10000" };
+static const char * const l_gps[]    = { "1 s", "2 s", "5 s", "10 s" };
+static const char * const v_log[]    = { "200", "500", "1000" };
+static const char * const l_log[]    = { "200 ms", "500 ms", "1 s" };
+static const char * const v_lang[]   = { "en", "de" };
+static const char * const l_lang[]   = { "English", "Deutsch" };
+static const char * const v_tz[]     = { "local", "utc", "lisbon" };
+static const char * const l_tz[]     = { "Local", "UTC", "Lisbon" };
+static const char * const v_region[] = { "dot", "comma" };
+static const char * const l_region[] = { "1.234.5", "1.234,5" };
+static const char * const v_scheme[] = { "wasteland", "ash", "rust" };
+static const char * const l_scheme[] = { "Wasteland", "Ash", "Rust" };
+static const char * const v_accent[] = { "amber", "green", "blue" };
+static const char * const l_accent[] = { "Amber", "Green", "Blue" };
+static const char * const v_grain[]  = { "on", "off" };
+static const char * const l_grain[]  = { "On", "Off" };
+
+/* the panels are rebuilt when the theme or the language changes - but not
+   from inside the click handler: the button that was clicked is part of the
+   tree that goes away, so the work waits for the next round */
+static void retheme_async(void * arg)
+{
+    LV_UNUSED(arg);
+    pda_shell_retheme();
+}
+
+static void apply_theme(const char * key)
+{
+    LV_UNUSED(key);
+    pda_theme_load();
+    lv_async_call(retheme_async, NULL);
+}
+
+static void apply_language(const char * key)
+{
+    LV_UNUSED(key);
+    tr_load();
+    lv_async_call(retheme_async, NULL);
+}
+
+static void apply_gps_poll(const char * key)
+{
+    LV_UNUSED(key);
+    pda_shell_set_gps_poll(atoi(prefs_str("gps_poll", "1000")));
+}
+
+static void apply_log_poll(const char * key)
+{
+    LV_UNUSED(key);
+    chat_ui_set_poll(atoi(prefs_str("log_poll", "200")));
+}
+
+static void apply_reset_log(const char * key)
+{
+    LV_UNUSED(key);
+    chat_ui_clear();
+}
+
+/* the clock, the units, the region and the time zone all live in the
+   format module */
+static void apply_format(const char * key)
+{
+    LV_UNUSED(key);
+    fmt_apply();
+    other_ui_refresh();
+}
+
+static void apply_grain(const char * key)
+{
+    LV_UNUSED(key);
+    grit_set_grain(!strcmp(prefs_str("grain", "on"), "on"));
+}
+
+static void on_cycle_click(lv_event_t * e)
+{
+    int i = (int)(lv_intptr_t)lv_event_get_user_data(e);
+    if(i < 0 || i >= g_n_cycle) return;
+    cycle_t * c = &g_cycle[i];
+    c->index = (c->index + 1) % c->n;
+    prefs_set_str(c->key, c->values[c->index]);
+    if(c->lbl) lv_label_set_text(c->lbl, c->labels[c->index]);
+    if(c->apply) c->apply(c->key);
+}
+
+/* a row whose value steps through the choices when it is clicked */
+static lv_obj_t * cycle_row(lv_obj_t * parent, const char * name, const char * key,
+                            const char * const * values, const char * const * labels,
+                            int n, apply_fn apply)
+{
+    lv_obj_t * r = row(parent, name);
+    if(g_n_cycle >= CYCLE_MAX) return r;
+
+    const char * cur = prefs_str(key, values[0]);
+    int idx = 0;
+    for(int i = 0; i < n; i++) if(!strcmp(cur, values[i])) idx = i;
+
+    lv_obj_t * btn = lv_button_create(r);
+    lv_obj_set_pos(btn, VAL_X, 0);
+    lv_obj_set_size(btn, 290, 17);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(btn, 0, LV_PART_MAIN);
+    lv_no_transition(btn);
+
+    lv_obj_t * lbl = label(btn, 0, 0, 0, labels[idx], &pda_font_mono_10, PDA_MSG_TEXT);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+
+    cycle_t * c = &g_cycle[g_n_cycle];
+    c->key = key;
+    c->values = values;
+    c->labels = labels;
+    c->n = n;
+    c->index = idx;
+    c->lbl = lbl;
+    c->apply = apply;
+    lv_obj_add_event_cb(btn, on_cycle_click, LV_EVENT_CLICKED,
+                        (void *)(lv_intptr_t)g_n_cycle);
+    g_n_cycle++;
+    return r;
+}
+
+/* a row with a button that does something */
+static lv_obj_t * action_row(lv_obj_t * parent, const char * name, const char * text,
+                             lv_event_cb_t cb)
+{
+    lv_obj_t * r = row(parent, name);
+    lv_obj_t * b = lv_button_create(r);
+    lv_obj_set_pos(b, VAL_X, 0);
+    lv_obj_set_size(b, 52, 17);
+    lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+    lv_no_transition(b);
+    lv_obj_t * l = lv_label_create(b);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    return r;
+}
+
+static void page_general(void)
+{
+    section(g_ui.content, "GENERAL");
+
+    /* the name the device answers to - the same one the messages carry */
+    lv_obj_t * r = row(g_ui.content, "Device name");
+    lv_obj_t * ta = text_field(r, chat_identity());
+    lv_obj_add_event_cb(ta, other_ui_on_name, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
+    g_ui.name_ta = ta;
+    g_ui.name_btn = save_button(r, on_save_name);
+    g_ui.name_btn_lbl = lv_obj_get_child(g_ui.name_btn, 0);
+
+    cycle_row(g_ui.content, "Time format", "time_fmt", v_time, l_time, 2, apply_format);
+    cycle_row(g_ui.content, "Units", "units", v_units, l_units, 2, apply_format);
+    cycle_row(g_ui.content, "Startup screen", "start_tab", v_start, l_start, 7, NULL);
+}
+
+static void page_advanced(void)
+{
+    section(g_ui.content, "ADVANCED");
+    cycle_row(g_ui.content, "GPS refresh", "gps_poll", v_gps, l_gps, 4, apply_gps_poll);
+    cycle_row(g_ui.content, "Log refresh", "log_poll", v_log, l_log, 3, apply_log_poll);
+    action_row(g_ui.content, "Reset log", "CLEAR", on_reset_log);
+}
+
+static void page_language(void)
+{
+    section(g_ui.content, "LANGUAGE");
+    cycle_row(g_ui.content, "Language", "lang", v_lang, l_lang, 2, apply_language);
+    cycle_row(g_ui.content, "Time zone", "tz", v_tz, l_tz, 3, apply_format);
+    cycle_row(g_ui.content, "Region", "region", v_region, l_region, 2, apply_format);
+}
+
+static void page_themes(void)
+{
+    section(g_ui.content, "THEMES");
+    cycle_row(g_ui.content, "Colour scheme", "scheme", v_scheme, l_scheme, 3, apply_theme);
+    cycle_row(g_ui.content, "Accent colour", "accent", v_accent, l_accent, 3, apply_theme);
+    cycle_row(g_ui.content, "Grain", "grain", v_grain, l_grain, 2, apply_grain);
 }
 
 static void page_settings(int sub)
 {
-    static const char * const planned[4][5] = {
-        { "Device name", "Time format", "Units", "Startup screen", NULL },
-        { "Performance", "Logging", "Reset log", NULL, NULL },
-        { "Language", "Keyboard layout", "Region", NULL, NULL },
-        { "Colour scheme", "Accent colour", "Font size", NULL, NULL },
-    };
-    const char * title = g_sub_names[PAGE_SETTINGS][sub];
-
-    section(g_ui.content, title);
-    for(int i = 0; i < 5 && planned[sub][i]; i++)
-        live_row(g_ui.content, planned[sub][i], "planned", "not wired up yet",
-                 PDA_MSG_SYS);
+    switch(sub) {
+        case 0: page_general(); break;
+        case 1: page_advanced(); break;
+        case 2: page_language(); break;
+        case 3: page_themes(); break;
+        default: page_system(); break;
+    }
 }
 
 /* the little SAVE button next to a text field */
@@ -474,7 +695,7 @@ static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb)
     lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
     lv_no_transition(b);
     lv_obj_t * l = lv_label_create(b);
-    lv_label_set_text(l, "SAVE");
+    lv_label_set_text(l, tr(TR_SAVE));
     lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     lv_obj_center(l);
@@ -490,7 +711,7 @@ static void saved_flash_cb(lv_timer_t * timer)
 {
     lv_obj_t * l = (lv_obj_t *)lv_timer_get_user_data(timer);
     if(l) {
-        lv_label_set_text(l, "SAVE");
+        lv_label_set_text(l, tr(TR_SAVE));
         lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     }
     s_flash_timer = NULL;      /* the timer deletes itself: say so */
@@ -500,7 +721,7 @@ static void saved_flash_cb(lv_timer_t * timer)
 static void flash_saved(lv_obj_t * btn, lv_obj_t * lbl)
 {
     if(!btn || !lbl) return;
-    lv_label_set_text(lbl, "SAVED");
+    lv_label_set_text(lbl, tr(TR_SAVED));
     lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_CARRIER_UP), LV_PART_MAIN);
     if(s_flash_timer) {
         lv_timer_t * old = s_flash_timer;
@@ -579,6 +800,7 @@ static void build_content(void)
     g_ui.n_live = 0;
     g_ui.n_tog = 0;
     g_ui.sec_no = 0;
+    g_n_cycle = 0;
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
@@ -590,8 +812,7 @@ static void build_content(void)
             case 1: page_bitchat(); break;
             case 2: page_fips(); break;
             case 3: page_wifi(); break;
-            case 4: page_gps(); break;
-            default: page_system(); break;
+            default: page_gps(); break;
         }
     }
     else if(g_ui.page == PAGE_USER) page_user();
@@ -659,12 +880,12 @@ void other_ui_refresh(void)
         }
         else if(!strcmp(key, "gps_lat")) {
             char b[32];
-            snprintf(b, sizeof(b), "%.5f", gps_current()->lat);
+            fmt_coord(gps_current()->lat, b, sizeof(b));
             set_live(i, b, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "gps_lon")) {
             char b[32];
-            snprintf(b, sizeof(b), "%.5f", gps_current()->lon);
+            fmt_coord(gps_current()->lon, b, sizeof(b));
             set_live(i, b, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "gps_sats")) {
@@ -674,7 +895,7 @@ void other_ui_refresh(void)
         }
         else if(!strcmp(key, "gps_speed")) {
             char b[32];
-            snprintf(b, sizeof(b), "%.1f m/s", gps_current()->speed);
+            fmt_speed(gps_current()->speed, b, sizeof(b));
             set_live(i, b, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "gps_src")) {
@@ -771,15 +992,15 @@ static void select_page(int page)
     g_ui.page = page;
     g_ui.sub = 0;
     int n = 0;
-    while(n < 8 && g_sub_names[page][n]) n++;
+    while(n < 8 && g_sub_ids[page][n]) n++;
     g_ui.n_subs = n;
     for(int i = 0; i < 8; i++) {
         if(!g_ui.sub_btn[i]) continue;
         bool show = (i < n);
         lv_obj_set_hidden(g_ui.sub_btn[i], !show);
-        if(show) lv_label_set_text(g_ui.sub_lbl[i], g_sub_names[page][i]);
+        if(show) lv_label_set_text(g_ui.sub_lbl[i], tr(g_sub_ids[page][i]));
     }
-    if(g_ui.strip_title) lv_label_set_text(g_ui.strip_title, g_page_names[page]);
+    if(g_ui.strip_title) lv_label_set_text(g_ui.strip_title, tr(g_page_ids[page]));
     restyle_nav();
     restyle_subs();
     build_content();
@@ -804,10 +1025,45 @@ static void on_toggle_click(lv_event_t * e)
                               LV_PART_MAIN);
 }
 
+/* empty the message log */
+static void on_reset_log(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    chat_ui_clear();
+}
+
 static void other_ui_tick(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
     other_ui_refresh();
+}
+
+/* the panel is rebuilt when the theme changes: the old timer has to go */
+void other_ui_destroy(void)
+{
+    if(g_ui.timer) {
+        lv_timer_delete(g_ui.timer);
+        g_ui.timer = NULL;
+    }
+    /* an animation that outlives its object is a crash waiting to happen
+       (the text cursor blinks) */
+    lv_kill_tree(g_ui.root);
+    g_ui.root = NULL;
+    g_ui.content = NULL;
+    g_ui.strip_title = NULL;
+}
+
+/* which page is open - the rebuild puts it back where it was */
+void other_ui_get_state(int * page, int * sub)
+{
+    *page = g_ui.page;
+    *sub = g_ui.sub;
+}
+
+void other_ui_set_state(int page, int sub)
+{
+    select_page(page);
+    if(sub > 0) select_sub(sub);
 }
 
 /* ---------- the text fields on the User page ---------- */
@@ -924,7 +1180,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     grit_square(root, 22, 9, 8, PDA_MSG_ACCENT);
     grit_square(root, 770, 9, 8, PDA_MSG_ACCENT);
 
-    g_ui.strip_title = label(root, 0, 0, 300, g_page_names[0], &pda_font_mono_10,
+    g_ui.strip_title = label(root, 0, 0, 300, tr(g_page_ids[0]), &pda_font_mono_10,
                              PDA_MSG_TEXT);
     lv_obj_set_style_text_align(g_ui.strip_title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_align(g_ui.strip_title, LV_ALIGN_TOP_MID, 0, 8);
@@ -947,7 +1203,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_no_transition(box);
         g_ui.nav_box[i] = box;
 
-        lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
+        lv_obj_t * l = label(box, 0, 0, 0, tr(g_page_ids[i]), &pda_font_mono_14,
                              PDA_TAB_TEXT);
         lv_obj_set_width(l, NAV_W - 16);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
@@ -1007,15 +1263,20 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollable(content, true);
     g_ui.content = content;
 
-    /* test hooks: open a given page (PDA_OTHER_PAGE / PDA_OTHER_SUB) */
+    /* test hooks: open a given page (PDA_OTHER_PAGE / PDA_OTHER_SUB). They
+       only count at startup: after that the panel keeps the page it was on. */
+    static bool first = true;
     int page = PAGE_CONNECTIONS;
     int sub = 0;
-    const char * p_env = getenv("PDA_OTHER_PAGE");
-    const char * s_env = getenv("PDA_OTHER_SUB");
-    if(p_env && *p_env) page = atoi(p_env);
-    if(s_env && *s_env) sub = atoi(s_env);
+    if(first) {
+        first = false;
+        const char * p_env = getenv("PDA_OTHER_PAGE");
+        const char * s_env = getenv("PDA_OTHER_SUB");
+        if(p_env && *p_env) page = atoi(p_env);
+        if(s_env && *s_env) sub = atoi(s_env);
+    }
     select_page(page);
     if(sub > 0) select_sub(sub);
-    lv_timer_create(other_ui_tick, 500, NULL);
+    g_ui.timer = lv_timer_create(other_ui_tick, 500, NULL);
     return root;
 }

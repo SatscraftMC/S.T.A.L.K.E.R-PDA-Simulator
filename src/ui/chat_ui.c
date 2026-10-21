@@ -1,6 +1,8 @@
 #include "ui/chat_ui.h"
 #include "ui/palette.h"
 #include "ui/grit.h"
+#include "ui/i18n.h"
+#include "ui/format.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "ui/prefs.h"
@@ -55,6 +57,7 @@ typedef struct {
     lv_obj_t * status_lbl;
     lv_obj_t * badge[CHAT_TRANSPORT_MAX];
     lv_obj_t * input;
+    lv_timer_t * timer;
     int rendered;         /* messages already drawn */
     int rows;              /* rows currently in the list */
     int y;                 /* running y of the next row */
@@ -64,6 +67,42 @@ typedef struct {
 static chat_ui_t g_ui;
 
 static void chat_tick(lv_timer_t * timer);
+static void refresh(void);
+
+/* the panel is rebuilt when the theme changes: the old timer has to go */
+void chat_ui_destroy(void)
+{
+    if(g_ui.timer) {
+        lv_timer_delete(g_ui.timer);
+        g_ui.timer = NULL;
+    }
+    /* an animation that outlives its object is a crash waiting to happen
+       (the text cursor blinks) */
+    lv_kill_tree(g_ui.root);
+    g_ui.root = NULL;
+    g_ui.list = NULL;
+    g_ui.input = NULL;
+}
+
+/* how often the log is looked at */
+void chat_ui_set_poll(int ms)
+{
+    if(ms < 50) ms = 50;
+    if(g_ui.timer) lv_timer_set_period(g_ui.timer, ms);
+}
+
+/* empty the log */
+void chat_ui_clear(void)
+{
+    chat_clear();
+    if(!g_ui.list) return;
+    lv_kill_tree(g_ui.list);
+    lv_obj_clean(g_ui.list);
+    g_ui.rows = 0;
+    g_ui.y = 0;
+    g_ui.rendered = 0;
+    refresh();
+}
 
 static void scroll_to_bottom(void)
 {
@@ -80,11 +119,9 @@ static bool at_bottom(void)
 
 static void add_row(const chat_msg_t * m)
 {
-    char tbuf[8];
-    struct tm lt;
+    char tbuf[16];
     time_t t = m->ts;
-    localtime_r(&t, &lt);
-    strftime(tbuf, sizeof(tbuf), "%H:%M", &lt);
+    fmt_clock(t, tbuf, sizeof(tbuf));
 
     const char * text = m->text;
     uint32_t name_col = PDA_MSG_SYS;
@@ -400,7 +437,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     lv_obj_t * ta = lv_textarea_create(compose);
     lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_placeholder_text(ta, "type a message");
+    lv_textarea_set_placeholder_text(ta, tr(TR_TYPE_MESSAGE));
     lv_obj_set_pos(ta, 4, 6);
     lv_obj_set_size(ta, 620, 26);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
@@ -427,7 +464,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_radius(send, 0, LV_PART_MAIN);
     lv_no_transition(send);
     lv_obj_t * slbl = lv_label_create(send);
-    lv_label_set_text(slbl, "SEND");
+    lv_label_set_text(slbl, tr(TR_SEND));
     lv_obj_set_style_text_font(slbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(slbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     lv_obj_center(slbl);
@@ -437,6 +474,8 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     if(frame) grit_corners(frame, FRAME_W, FRAME_H, PDA_FRAME);
 
     refresh();
-    lv_timer_create(chat_tick, 200, NULL);
+    int poll = atoi(prefs_str("log_poll", "200"));
+    if(poll < 50) poll = 200;
+    g_ui.timer = lv_timer_create(chat_tick, poll, NULL);
     return root;
 }

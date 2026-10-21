@@ -188,7 +188,7 @@ def test_tabs():
 
 def test_other_pages():
     print("2. every Other page comes up", flush=True)
-    pages = [(0, s) for s in range(4)] + [(1, s) for s in range(6)] + \
+    pages = [(0, s) for s in range(5)] + [(1, s) for s in range(5)] + \
             [(2, 0), (3, 0)]
     for page, sub in pages:
         p, f, logpath = start({"PDA_START_TAB": "6",
