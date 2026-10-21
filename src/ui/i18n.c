@@ -36,37 +36,37 @@ static const char * const s_en[TR_COUNT] = {
     [TR_TYPE_MESSAGE]   = "type a message",
 };
 
-static const char * const s_de[TR_COUNT] = {
-    [TR_TAB_MAP]        = "Karte",
-    [TR_TAB_MSG]        = "Nachrichten",
-    [TR_TAB_CONTACTS]   = "Kontakte",
+static const char * const s_pl[TR_COUNT] = {
+    [TR_TAB_MAP]        = "Mapa",
+    [TR_TAB_MSG]        = "Wiadomo\u015bci",
+    [TR_TAB_CONTACTS]   = "Kontakty",
     [TR_TAB_RADIO]      = "Radio",
     [TR_TAB_CAMERA]     = "Kamera",
-    [TR_TAB_WALLET]     = "Wallet",
-    [TR_TAB_OTHER]      = "Sonstiges",
-    [TR_LAYER_TASK]     = "Aufgabenliste",
-    [TR_LAYER_STASH]    = "Lager",
-    [TR_LAYER_AREA]     = "Gebiete",
-    [TR_LAYER_SECOND]   = "Nebenziele",
-    [TR_LAYER_IMPORT]   = "Wichtige Objekte",
-    [TR_SEC_SETTINGS]   = "Einstellungen",
-    [TR_SEC_CONNECTIONS]= "Verbindungen",
-    [TR_SEC_USER]       = "Benutzer",
-    [TR_SEC_EXTRAS]     = "Extras",
-    [TR_SUB_GENERAL]    = "Allgemein",
-    [TR_SUB_ADVANCED]   = "Erweitert",
-    [TR_SUB_LANGUAGE]   = "Sprache",
-    [TR_SUB_THEMES]     = "Designs",
+    [TR_TAB_WALLET]     = "Portfel",
+    [TR_TAB_OTHER]      = "Inne",
+    [TR_LAYER_TASK]     = "Lista zada\u0144",
+    [TR_LAYER_STASH]    = "Schowki",
+    [TR_LAYER_AREA]     = "Obszary",
+    [TR_LAYER_SECOND]   = "Zadania drugorz\u0119dne",
+    [TR_LAYER_IMPORT]   = "Wa\u017cne obiekty",
+    [TR_SEC_SETTINGS]   = "Ustawienia",
+    [TR_SEC_CONNECTIONS]= "Po\u0142\u0105czenia",
+    [TR_SEC_USER]       = "U\u017cytkownik",
+    [TR_SEC_EXTRAS]     = "Dodatki",
+    [TR_SUB_GENERAL]    = "Og\u00f3lne",
+    [TR_SUB_ADVANCED]   = "Zaawansowane",
+    [TR_SUB_LANGUAGE]   = "J\u0119zyk",
+    [TR_SUB_THEMES]     = "Motywy",
     [TR_SUB_INFO]       = "Info",
     [TR_SUB_BITCHAT]    = "Bitchat",
     [TR_SUB_FIPS]       = "F.I.P.S",
-    [TR_SUB_WIFI]       = "WLAN",
+    [TR_SUB_WIFI]       = "WiFi",
     [TR_SUB_GPS]        = "GPS",
     [TR_SUB_SYSTEM]     = "System",
-    [TR_SEND]           = "SENDEN",
-    [TR_SAVE]           = "SPEICHERN",
-    [TR_SAVED]          = "GESPEICHERT",
-    [TR_TYPE_MESSAGE]   = "Nachricht schreiben",
+    [TR_SEND]           = "WY\u015aLIJ",
+    [TR_SAVE]           = "ZAPISZ",
+    [TR_SAVED]          = "ZAPISANO",
+    [TR_TYPE_MESSAGE]   = "napisz wiadomo\u015b\u0107",
 };
 
 static int s_lang = TR_LANG_EN;
@@ -74,14 +74,14 @@ static int s_lang = TR_LANG_EN;
 const char * tr(tr_id_t id)
 {
     if(id < 0 || id >= TR_COUNT) return "";
-    const char * const * tab = (s_lang == TR_LANG_DE) ? s_de : s_en;
+    const char * const * tab = (s_lang == TR_LANG_PL) ? s_pl : s_en;
     const char * s = tab[id];
     return s ? s : s_en[id];
 }
 
 void tr_set_lang(int lang)
 {
-    s_lang = (lang == TR_LANG_DE) ? TR_LANG_DE : TR_LANG_EN;
+    s_lang = (lang == TR_LANG_PL) ? TR_LANG_PL : TR_LANG_EN;
 }
 
 int tr_lang(void)
@@ -92,10 +92,10 @@ int tr_lang(void)
 void tr_load(void)
 {
     const char * l = prefs_str("lang", "en");
-    tr_set_lang(!strcmp(l, "de") ? TR_LANG_DE : TR_LANG_EN);
+    tr_set_lang(!strcmp(l, "pl") ? TR_LANG_PL : TR_LANG_EN);
 }
 
 const char * tr_lang_name(int lang)
 {
-    return (lang == TR_LANG_DE) ? "Deutsch" : "English";
+    return (lang == TR_LANG_PL) ? "Polski" : "English";
 }

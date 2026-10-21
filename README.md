@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.1.1-alpha**
+**v0.1.2-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -113,7 +113,7 @@ clicking a value steps through its choices:
 |---|---|
 | General | the device name, 24 or 12 hour clock, metric or imperial units, the screen the device opens on |
 | Advanced | how often the GPS is looked at (1/2/5/10 s), how often the log is (200/500/1000 ms), and a button that empties the log |
-| Language | English or Deutsch (the tab bar, the menus and the buttons), the time zone (Local / UTC / Lisbon) and the region's number format (1.234.5 or 1.234,5) |
+| Language | English or Polish (the tab bar, the menus and the buttons), the time zone (Local / UTC / Lisbon) and the region's number format (1.234.5 or 1.234,5) |
 | Themes | the colour scheme (Wasteland / Ash / Rust), the accent colour (Amber / Green / Blue) and the grain (the texture on the panels) on or off |
 | System | the version, the GPS state, the screen, the carriers, the language, the theme and where the settings file lives |
 
@@ -234,7 +234,16 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |
 | `tools/make_screenshots.py` | take the pictures in `docs/screenshots/` |
 | `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
+
 | `tools/fetch_deps.sh` | fetch LVGL + reassemble the split map levels |
+
+### The fonts
+
+The interface is drawn in **Share Tech Mono** (and the titles in **VT323**),
+as 1 bit bitmaps - no font file at runtime, nothing to load on the Pi. Share
+Tech Mono has no Polish letters apart from "ó" and "ł", so the ones it is
+missing come from **VT323**, which is wired in as the fallback font of the
+interface fonts. `tools/gen_fonts.sh` regenerates all of it.
 
 ## Status
 
@@ -244,7 +253,7 @@ panel - and every setting in it works. Still to come: wallet/QR payments,
 camera, radio, real navigation stack, input abstraction (sim -> GPIO/evdev),
 and the Pi port (DRM/KMS + systemd boot-to-app). The *Extras* page of the
 Other tab is still empty, and the pages' contents are still English even when
-the language is set to Deutsch.
+the language is set to Polski.
 
 ## License
 

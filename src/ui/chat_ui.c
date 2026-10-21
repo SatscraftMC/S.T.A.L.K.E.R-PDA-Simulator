@@ -440,6 +440,8 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_textarea_set_placeholder_text(ta, tr(TR_TYPE_MESSAGE));
     lv_obj_set_pos(ta, 4, 6);
     lv_obj_set_size(ta, 620, 26);
+    /* the field must not shrink to the size of its text */
+    lv_obj_set_style_min_width(ta, 620, LV_PART_MAIN);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
@@ -448,6 +450,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(ta, 6, LV_PART_MAIN);
     /* the cursor only shows while the field has the focus */
     lv_cursor_only_when_focused(ta);
     g_ui.input = ta;

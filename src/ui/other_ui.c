@@ -61,6 +61,8 @@
 #define PAGE_W       480
 #define PAGE_H       384
 #define ROW_H        18
+#define FIELD_W      220
+#define FIELD_H      17
 #define VAL_X        150
 #define BACK_W       800
 #define BACK_H       452
@@ -224,9 +226,19 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
 {
     lv_obj_t * ta = lv_textarea_create(row_obj);
     lv_textarea_set_one_line(ta, true);
+    /* one_line makes the label as wide as the text and gives it a minimum of
+       100% of the field - a minimum that is bigger than the field, so the
+       field ends up the size of its text and the first letter is cut off */
+    lv_obj_t * tl = lv_obj_get_child(ta, 0);
+    if(tl) {
+        lv_obj_set_width(tl, lv_pct(100));
+        lv_obj_set_style_min_width(tl, 0, 0);
+    }
     lv_textarea_set_placeholder_text(ta, placeholder);
     lv_obj_set_pos(ta, VAL_X, 0);
-    lv_obj_set_size(ta, 220, 17);
+    lv_obj_set_size(ta, FIELD_W, FIELD_H);
+    /* and it must not shrink either */
+    lv_obj_set_style_min_width(ta, FIELD_W, LV_PART_MAIN);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
@@ -235,6 +247,12 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
+    /* a little more room on the left: the letters have a bearing of their
+       own and the first one was cut in half by the edge of the field */
+    lv_obj_set_style_pad_left(ta, 4, LV_PART_MAIN);
+    /* the theme draws the cursor as a left border - that border lands on the
+       character under it */
+    lv_obj_set_style_border_width(ta, 0, LV_PART_CURSOR);
     lv_cursor_only_when_focused(ta);
     return ta;
 }
@@ -484,8 +502,8 @@ static const char * const v_gps[]    = { "1000", "2000", "5000", "10000" };
 static const char * const l_gps[]    = { "1 s", "2 s", "5 s", "10 s" };
 static const char * const v_log[]    = { "200", "500", "1000" };
 static const char * const l_log[]    = { "200 ms", "500 ms", "1 s" };
-static const char * const v_lang[]   = { "en", "de" };
-static const char * const l_lang[]   = { "English", "Deutsch" };
+static const char * const v_lang[]   = { "en", "pl" };
+static const char * const l_lang[]   = { "English", "Polski" };
 static const char * const v_tz[]     = { "local", "utc", "lisbon" };
 static const char * const l_tz[]     = { "Local", "UTC", "Lisbon" };
 static const char * const v_region[] = { "dot", "comma" };

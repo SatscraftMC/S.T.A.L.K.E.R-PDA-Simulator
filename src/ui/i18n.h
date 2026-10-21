@@ -39,7 +39,8 @@ typedef enum {
 } tr_id_t;
 
 #define TR_LANG_EN 0
-#define TR_LANG_DE 1
+#define TR_LANG_PL 1
+#define TR_LANG_COUNT 2
 
 const char * tr(tr_id_t id);
 void tr_set_lang(int lang);
