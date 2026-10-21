@@ -1,0 +1,430 @@
+#!/usr/bin/env python3
+"""Bug hunt for the PDA simulator's UI.
+
+Drives the real app and checks the things that are easy to break:
+
+  1. every tab comes up and draws something
+  2. every page of the Other tab comes up and draws something
+  3. the name and the room can be typed and SAVED, and survive a restart
+  4. the settings file survives a restart, and a broken one does not kill
+     the app
+  5. the app survives a name with quotes, unicode and a silly length
+  6. the app survives being driven hard (every tab, every page, in a row)
+  7. the app survives with no relay and no daemon
+
+Run it with the ordinary build, or point it at an ASan build with
+    PDA_TEST_BUILD=/tmp/build-asan/pda python3 tools/ui_test.py
+"""
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
+LOGDIR = "/tmp/opencode/uitest"
+SHOTS = "/tmp/opencode/uishot"
+PREFS = os.path.expanduser("~/.config/pda/prefs.conf")
+OX, OY = 560, 300           # the window's client origin on this desktop
+DY = 45                     # the panel starts under the tab row and the gap
+NAME_Y = 99                 # the name field on the User page
+
+FAIL = []
+
+
+def note(ok, msg):
+    print(("  PASS  " if ok else "  FAIL  ") + msg, flush=True)
+    if not ok:
+        FAIL.append(msg)
+    return ok
+
+
+def free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def start(env_extra=None, log="app"):
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")
+    env.update(env_extra or {})
+    path = os.path.join(LOGDIR, f"{log}.log")
+    f = open(path, "w")
+    p = subprocess.Popen([APP], stdout=f, stderr=subprocess.STDOUT, env=env)
+    return p, f, path
+
+
+def stop(p, f):
+    if p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    f.close()
+
+
+def focus_window():
+    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
+    time.sleep(0.4)
+
+
+def shot(name):
+    focus_window()
+    subprocess.run(["gnome-screenshot", "-w", "-f", f"{SHOTS}_{name}.png"],
+                   capture_output=True)
+    return f"{SHOTS}_{name}.png"
+
+
+def lit_pixels(path, y0=0, y1=480):
+    """how many bright pixels the screen has (a blank screen has almost none)"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return -1
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    px = im.load()
+    n = 0
+    for y in range(y0, min(y1, h)):
+        for x in range(0, w, 2):
+            r, g, b = px[x, y]
+            if r + g + b > 300:
+                n += 1
+    return n
+
+
+def click(x, y):
+    focus_window()
+    subprocess.run([sys.executable, "/tmp/opencode/pdaclick2.py",
+                    str(OX + x), str(OY + y)], capture_output=True)
+    time.sleep(0.5)
+
+
+def type_text(s):
+    """type a string with XTEST key events (shift for the capitals)"""
+    from Xlib import display, X
+    from Xlib.ext import xtest
+    from Xlib import XK
+    d = display.Display()
+    shift = d.keysym_to_keycode(XK.string_to_keysym("Shift_L"))
+    for ch in s:
+        ks = XK.string_to_keysym(ch)
+        if not ks:
+            continue
+        code = d.keysym_to_keycode(ks)
+        if not code:
+            continue
+        upper = ch.isupper() or ch in '~!@#$%^&*()_+{}|:"<>?'
+        if upper:
+            xtest.fake_input(d, X.KeyPress, shift)
+            d.sync()
+        xtest.fake_input(d, X.KeyPress, code)
+        d.sync()
+        time.sleep(0.05)
+        xtest.fake_input(d, X.KeyRelease, code)
+        d.sync()
+        if upper:
+            xtest.fake_input(d, X.KeyRelease, shift)
+            d.sync()
+        time.sleep(0.08)
+
+
+def press_enter():
+    from Xlib import display, X
+    from Xlib.ext import xtest
+    d = display.Display()
+    code = d.keysym_to_keycode(0xFF0D)
+    xtest.fake_input(d, X.KeyPress, code)
+    d.sync()
+    time.sleep(0.08)
+    xtest.fake_input(d, X.KeyRelease, code)
+    d.sync()
+    time.sleep(0.3)
+
+
+def app_alive(p, logpath):
+    """the app is alive and has not logged an error"""
+    if p.poll() is not None:
+        return False
+    try:
+        with open(logpath) as f:
+            data = f.read()
+    except OSError:
+        return True
+    bad = re.search(r"AddressSanitizer|SIGSEGV|Segmentation|assert", data)
+    return bad is None
+
+
+# --------------------------------------------------------------------------
+
+
+def test_tabs():
+    print("1. every tab comes up", flush=True)
+    for tab in range(7):
+        p, f, logpath = start({"PDA_START_TAB": str(tab)}, f"tab{tab}")
+        time.sleep(2.6)
+        ok = app_alive(p, logpath)
+        path = shot(f"tab{tab}")
+        n = lit_pixels(path)
+        note(ok and n > 20, f"tab {tab} renders ({n} lit pixels)")
+        stop(p, f)
+
+
+def test_other_pages():
+    print("2. every Other page comes up", flush=True)
+    pages = [(0, s) for s in range(4)] + [(1, s) for s in range(6)] + \
+            [(2, 0), (3, 0)]
+    for page, sub in pages:
+        p, f, logpath = start({"PDA_START_TAB": "6",
+                                "PDA_OTHER_PAGE": str(page),
+                                "PDA_OTHER_SUB": str(sub)}, f"page{page}_{sub}")
+        time.sleep(2.4)
+        ok = app_alive(p, logpath)
+        path = shot(f"page{page}_{sub}")
+        n = lit_pixels(path)
+        note(ok and n > 20, f"Other page {page}.{sub} renders ({n} lit pixels)")
+        stop(p, f)
+
+
+def test_name_save():
+    print("3. the name can be typed and saved", flush=True)
+    if os.path.exists(PREFS):
+        os.unlink(PREFS)
+
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "name")
+    time.sleep(2.8)
+    try:
+        # the name field (the content starts at app x=190, the value column
+        # 158 into it) and the SAVE button to its right
+        click(450, NAME_Y)
+        time.sleep(0.3)
+        type_text("Satscraft")
+        time.sleep(0.4)
+        shot("name_typed")
+        click(605, NAME_Y)
+        time.sleep(0.8)
+        shot("name_saved")
+        saved = ""
+        if os.path.exists(PREFS):
+            with open(PREFS) as f:
+                saved = f.read()
+        note(re.search(r"name\s*=\s*Satscraft\s*$", saved, re.M) is not None,
+             f"the name was written to the settings file ({saved.strip()!r})")
+    finally:
+        stop(p, f)
+
+    # and it survives a restart
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "name2")
+    time.sleep(2.6)
+    try:
+        path = shot("name_restart")
+        # the name is drawn in the field: look for the pixels of the text
+        n = lit_pixels(path, DY + 10, DY + 40)
+        note(n > 10, f"the name is there after a restart ({n} lit pixels in the field)")
+    finally:
+        stop(p, f)
+
+
+def test_settings_file():
+    print("4. the settings file", flush=True)
+    # a broken file must not kill the app
+    with open(PREFS, "w") as f:
+        f.write("this is not a setting\n= = =\nname\n")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "broken")
+    time.sleep(2.6)
+    note(app_alive(p, logpath), "a broken settings file does not kill the app")
+    stop(p, f)
+
+    # a name with the characters that break a JSON envelope
+    os.makedirs(os.path.dirname(PREFS), exist_ok=True)
+    with open(PREFS, "w") as f:
+        f.write('name = Ro"ok\\Blue\nroom = Zone "A"\n')
+    p, f, logpath = start({"PDA_START_TAB": "1"}, "quotes")
+    time.sleep(2.6)
+    ok = app_alive(p, logpath)
+    stop(p, f)
+    note(ok, "a name with quotes and backslashes does not kill the app")
+
+    # a silly long name
+    with open(PREFS, "w") as f:
+        f.write("name = " + ("A" * 400) + "\n")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "long")
+    time.sleep(2.6)
+    ok = app_alive(p, logpath)
+    shot("longname")
+    stop(p, f)
+    note(ok, "a very long name does not kill the app")
+
+    if os.path.exists(PREFS):
+        os.unlink(PREFS)
+
+
+def test_no_carriers():
+    print("5. no relay, no daemon", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "1",
+                            "PDA_RELAY_HOST": "127.0.0.1",
+                            "PDA_RELAY_PORT": str(free_port()),
+                            "PDA_FIPS_SOCK": "/tmp/opencode/uitest/none.sock"},
+                           "nocarriers")
+    time.sleep(3.0)
+    ok = app_alive(p, logpath)
+    shot("nocarriers")
+    stop(p, f)
+    note(ok, "the app runs with no carrier at all")
+
+
+def test_hard_use():
+    print("6. driving it hard", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1"}, "hard")
+    time.sleep(2.6)
+    try:
+        # every tab, in a row
+        for tab in range(7):
+            click(120 + tab * 80, 22)
+        time.sleep(0.5)
+        # every sub tab of the connections page
+        click(120 + 6 * 80, 22)
+        time.sleep(0.4)
+        for sub in range(6):
+            click(206 + 95 * sub + 40, DY + 13)
+        time.sleep(0.5)
+        # and the nav column
+        for y in (20, 50, 80, 110):
+            click(40, DY + y)
+        time.sleep(0.5)
+        ok = app_alive(p, logpath)
+        shot("hard")
+    finally:
+        stop(p, f)
+    note(ok, "clicking through everything does not crash the app")
+
+
+
+def test_json_escaping():
+    print("7. a name that would break the wire format", flush=True)
+    port = free_port()
+    relay = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "relay.py"),
+                              "--host", "127.0.0.1", "--port", str(port), "-v"],
+                             stdout=open(os.path.join(LOGDIR, "relay.log"), "w"),
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+    peer.settimeout(5)
+    name = 'Ro"ok\\Blue'
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_RELAY_PORT": str(port),
+                            "PDA_NAME": name, "PDA_TEST_SEND": "hello there"},
+                           "escape")
+    try:
+        time.sleep(3.0)
+        got = None
+        end = time.time() + 6
+        while time.time() < end and not got:
+            try:
+                data = peer.recv(4096)
+            except socket.timeout:
+                continue
+            for line in data.decode("utf-8", "replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    m = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if m.get("t") == "msg":
+                    got = m
+        note(got is not None and got.get("from") == name,
+             f"the relay parsed the message from {name!r} (got {got and got.get('from')!r})")
+        with open(os.path.join(LOGDIR, "relay.log")) as f:
+            rlog = f.read()
+        note("bad line" not in rlog, "the relay did not see a broken line")
+    finally:
+        stop(p, f)
+        peer.close()
+        relay.terminate()
+        try:
+            relay.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
+
+
+def test_many_messages():
+    print("8. a lot of messages", flush=True)
+    port = free_port()
+    relay = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "relay.py"),
+                              "--host", "127.0.0.1", "--port", str(port)],
+                             stdout=open(os.path.join(LOGDIR, "relay2.log"), "w"),
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_RELAY_PORT": str(port)},
+                          "many")
+    try:
+        time.sleep(2.5)
+        long_msg = "a very long message " * 40
+        for i in range(220):
+            peer.sendall((json.dumps({"v": 1, "t": "msg", "id": f"m{i}",
+                                       "from": "ROOK", "room": "SECTOR",
+                                       "text": long_msg if i == 5 else f"message {i}",
+                                       "ts": int(time.time())}) + "\n").encode())
+        time.sleep(4.0)
+        ok = app_alive(p, logpath)
+        shot("many")
+        note(ok, "220 messages (one of them very long) do not kill the app")
+    finally:
+        stop(p, f)
+        peer.close()
+        relay.terminate()
+        try:
+            relay.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
+
+
+TESTS = {
+    "tabs": test_tabs,
+    "pages": test_other_pages,
+    "name": test_name_save,
+    "prefs": test_settings_file,
+    "carriers": test_no_carriers,
+    "hard": test_hard_use,
+    "escape": test_json_escaping,
+    "many": test_many_messages,
+}
+
+def main():
+    if not os.path.exists(APP):
+        print("build the app first: ./build.sh")
+        return 1
+    os.makedirs(LOGDIR, exist_ok=True)
+    subprocess.run(["pkill", "-x", "pda"], capture_output=True)
+    time.sleep(0.5)
+
+    want = sys.argv[1:] or list(TESTS.keys())
+    for name in want:
+        fn = TESTS.get(name)
+        if not fn:
+            print("no such test:", name)
+            continue
+        fn()
+        print()
+
+    print()
+    if FAIL:
+        print(f"{len(FAIL)} check(s) failed")
+        for f in FAIL:
+            print("  - " + f)
+        return 1
+    print("all checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

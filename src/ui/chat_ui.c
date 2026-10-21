@@ -144,12 +144,28 @@ static void add_row(const chat_msg_t * m)
     lv_obj_set_style_text_color(nl, lv_color_hex(name_col), LV_PART_MAIN);
     lv_obj_set_style_pad_all(nl, 0, LV_PART_MAIN);
 
-    /* the carrier it came in on */
-    if(show_carrier && m->transport >= 0 && m->transport < chat_transport_count()) {
-        const chat_transport_t * tr = chat_transport_get(m->transport);
-        if(tr) {
+    /* the carrier it came in on - or, for our own messages, the ones it
+       went out on */
+    if(show_carrier) {
+        const char * tag = NULL;
+        if(m->transport >= 0 && m->transport < chat_transport_count()) {
+            const chat_transport_t * tr = chat_transport_get(m->transport);
+            if(tr) tag = tr->tag;
+        }
+        else if(m->outbound) {
+            static char tags[32];
+            tags[0] = 0;
+            for(int i = 0; i < chat_transport_count(); i++) {
+                const chat_transport_t * tr = chat_transport_get(i);
+                if(!tr || !tr->up) continue;
+                if(tags[0]) strncat(tags, " ", sizeof(tags) - strlen(tags) - 1);
+                strncat(tags, tr->tag, sizeof(tags) - strlen(tags) - 1);
+            }
+            tag = tags[0] ? tags : NULL;
+        }
+        if(tag) {
             lv_obj_t * cl = lv_label_create(row);
-            lv_label_set_text(cl, tr->tag);
+            lv_label_set_text(cl, tag);
             lv_obj_set_pos(cl, tag_x, 2);
             lv_obj_set_width(cl, TAG_W);
             lv_obj_set_style_text_font(cl, &pda_font_mono_10, LV_PART_MAIN);

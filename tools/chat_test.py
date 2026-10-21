@@ -22,7 +22,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP = os.path.join(ROOT, "build", "pda")
+APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
 RELAY = os.path.join(ROOT, "tools", "relay.py")
 SHOT = "/tmp/opencode/chat"
 LOGDIR = "/tmp/opencode"

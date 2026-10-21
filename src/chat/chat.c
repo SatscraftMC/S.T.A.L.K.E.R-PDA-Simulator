@@ -48,7 +48,15 @@ static void make_id(char * out, size_t outn)
 void chat_set_identity(const char * name)
 {
     if(!name || !*name) return;
-    snprintf(s_id, sizeof(s_id), "%.*s", (int)sizeof(s_id) - 1, name);
+    /* no control characters: the name goes into a file and onto the wire */
+    size_t o = 0;
+    for(const char * p = name; *p && o + 1 < sizeof(s_id); p++) {
+        unsigned char c = (unsigned char)*p;
+        if(c < 0x20 || c == 0x7f) continue;
+        s_id[o++] = *p;
+    }
+    if(o == 0) return;
+    s_id[o] = 0;
 }
 
 const char * chat_identity(void)
@@ -64,7 +72,14 @@ const char * chat_room(void)
 void chat_set_room(const char * room)
 {
     if(!room || !*room) return;
-    snprintf(s_room, sizeof(s_room), "%.*s", (int)sizeof(s_room) - 1, room);
+    size_t o = 0;
+    for(const char * p = room; *p && o + 1 < sizeof(s_room); p++) {
+        unsigned char c = (unsigned char)*p;
+        if(c < 0x20 || c == 0x7f) continue;
+        s_room[o++] = *p;
+    }
+    if(o == 0) return;
+    s_room[o] = 0;
 }
 
 void chat_add_transport(chat_transport_t * t)

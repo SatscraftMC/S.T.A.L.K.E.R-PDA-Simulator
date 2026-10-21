@@ -1,30 +1,24 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.0.3-pre-alpha**
+**v0.0.4-pre-alpha**
 
-An open-source handheld communicator UI in the spirit of the STALKER PDA: a
-gripped, button-driven device with an offline map, radio/messages, contacts and
-a Lightning wallet.
+A handheld communicator in the spirit of the STALKER PDA: an offline map, a
+group chat that works over the local mesh, the FIPS mesh and the internet,
+contacts and a Lightning wallet.
 
-This repository is the **desktop simulator** of that device. The UI is written
-in **LVGL v9** (C) and runs in an 800x480 SDL2 window; the same UI code is
-meant to be re-targeted at a Raspberry Pi 3B with a 5" 800x480 HDMI display
-(no touch - physical buttons only), which is why nothing here depends on a
-desktop environment.
+The UI is **LVGL v9** (C) in an 800x480 window. This repository is the
+**desktop simulator** of a device meant to run on a Raspberry Pi 3B with a 5"
+800x480 HDMI screen and physical buttons - which is why nothing here depends
+on a desktop environment.
 
-```
-+--------------------------------------------+
-|  Area map | Messages | Contacts | Radio ... |   <- parallelogram tab bar
-|  Task list | Stashes | Areas | ...        |   <- layer toggles (UI only for now)
-+--------------------------------------------+
-|                                            |
-|              offline satellite map         |   <- drag to pan, +/- to zoom
-|                                            |
-+--------------------------------------------+
-```
+| | |
+|---|---|
+| ![the area map](docs/screenshots/area-map.png) | ![the room](docs/screenshots/messages.png) |
+| **The map** - real Esri satellite imagery of Madeira, 27 named places, 16 zoom steps from the whole archipelago down to about a metre per pixel. Drag to pan, wheel or buttons to zoom. | **The room** - one chat, every carrier. What you type goes out on the local mesh, the FIPS mesh and the internet at once; everything that comes in lands in the same log, tagged with the carrier it arrived on. |
+| ![connections](docs/screenshots/other-connections.png) | ![the user page](docs/screenshots/other-user.png) |
+| **Connections** - what is up and what each system is set to. | **User** - the name other devices see, the room, and what the message log shows. |
 
-## Features so far
-
+## Features
 
 - **Offline map** with real Esri satellite imagery of Madeira, zoom levels
   **64 - 10923** (from "whole archipelago" down to ~1 m per pixel).
@@ -39,29 +33,20 @@ desktop environment.
   carrier it arrived on.
 - **The Other tab** is the device's control panel: a column of sections
   (Settings, Connections, User, Extras), sub-tabs across the top of the pane,
-  and the page below that. *Connections* shows what is connected and the
+  and the page below that. *Connections* says what is connected and shows the
   settings of each system; *User* is where the name other devices see and the
   message preferences live.
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
   `PDA_GPS_LAT`/`PDA_GPS_LON` to force a position, `PDA_GPS_DEMO=1` for a slow
-  drift without hardware). The *Other* panel shows the live GPS state.
+  drift without hardware).
 - **Mouse wheel zooms towards the cursor** (the world point under the pointer
   stays under the pointer); the +/- buttons zoom around the middle of the view.
 
-### The Messages tab - one room, three carriers
+## The Messages tab - one room, three carriers
 
-```
-+-------------------------------------------------------------+
-| SECTOR   mesh 2425 / mesh port 4600 / relay 1.2.3.4:7788  BIT FIPS NET |
-+-------------------------------------------------------------+
-| 13:59  ROOK     FIPS  anyone got the drop coords?          |
-| 13:59  ME       NET   not yet, rain again                 |
-+-------------------------------------------------------------+
-| [ type a message...                                ] [ SEND ] |
-+-------------------------------------------------------------+
-```
+![the messages tab](docs/screenshots/messages.png)
 
 Everything rides the same envelope on all three carriers:
 
@@ -95,16 +80,14 @@ EOF
 The mesh carrier needs no setup at all: start two PDAs on the same network
 and they hear each other.
 
-### The Other tab - settings, connections, user
+## The Other tab - settings, connections, user
 
-```
-+--------------+ +------------------------------------------+
-| Settings     | | General | Advanced | Language | Themes    |
-| Connections  | +------------------------------------------+
-| User         | |                                          |
-| Extras       | |                                          |
-+--------------+ +------------------------------------------+
-```
+![the other tab](docs/screenshots/other-connections.png)
+
+A column of sections on the left (Settings, Connections, User, Extras), a
+strip of sub-tabs across the top of the pane, the page below that. The
+sub-tabs belong to the section: *Settings* has General / Advanced / Language /
+Themes, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS / System.
 
 **Connections → Info** is the one that matters: it says whether each system
 is up - the local mesh, the FIPS mesh, the internet, WiFi, GPS - and the
@@ -119,7 +102,7 @@ switches for what the message log shows.
 The settings are remembered in `~/.config/pda/prefs.conf` (override with
 `PDA_PREFS`), so they survive a restart.
 
-### Environment
+## Environment
 
 | variable | what it does |
 |---|---|
@@ -143,7 +126,7 @@ The app talks to **gpsd**'s NMEA socket (`127.0.0.1:2947`) and nothing else:
 sudo apt install gpsd
 # USB module:
 sudo gpsd -F /dev/ttyUSB0
-# UART module (BN-880 on the 40-pin header): enable the serial port in
+# UART module (BN-880 on the Pi's 40-pin header): enable the serial port in
 # raspi-config (Interface Options -> Serial Port), then:
 sudo gpsd -F /dev/serial0
 gpspipe -w          # should print $GNRMC lines
@@ -225,9 +208,12 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
 | `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
 | `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
+| `tools/ui_test.py` | bug hunt for the UI: every tab and every page, the name and the room being saved, a broken settings file, a name that would break the wire format, and driving the app hard |
 | `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
 | `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |
-| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier || `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
+| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |
+| `tools/make_screenshots.py` | take the pictures in `docs/screenshots/` |
+| `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
 | `tools/fetch_deps.sh` | fetch LVGL + reassemble the split map levels |
 
 ## Status

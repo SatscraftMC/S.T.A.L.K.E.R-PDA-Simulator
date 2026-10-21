@@ -54,6 +54,8 @@ static const char * const g_sub_names[PAGE_COUNT][8] = {
 static void other_ui_refresh(void);
 static void other_ui_on_name(lv_event_t * e);
 static void other_ui_on_room(lv_event_t * e);
+static void on_save_name(lv_event_t * e);
+static void on_save_room(lv_event_t * e);
 static void on_toggle_click(lv_event_t * e);
 
 typedef struct {
@@ -80,6 +82,10 @@ typedef struct {
 
     lv_obj_t * name_ta;
     lv_obj_t * room_ta;
+    lv_obj_t * name_btn;
+    lv_obj_t * room_btn;
+    lv_obj_t * name_btn_lbl;
+    lv_obj_t * room_btn_lbl;
 } other_ui_t;
 
 static other_ui_t g_ui;
@@ -378,6 +384,48 @@ static void page_settings(int sub)
                  PDA_MSG_SYS);
 }
 
+/* the little SAVE button next to a text field */
+static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb)
+{
+    lv_obj_t * b = lv_button_create(row_obj);
+    lv_obj_set_pos(b, VAL_X + 232, 0);
+    lv_obj_set_size(b, 52, 17);
+    lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+    lv_obj_t * l = lv_label_create(b);
+    lv_label_set_text(l, "SAVE");
+    lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    return b;
+}
+
+/* flash the button so the user knows it took */
+static void saved_flash_cb(lv_timer_t * timer)
+{
+    lv_obj_t * l = (lv_obj_t *)lv_timer_get_user_data(timer);
+    if(l) {
+        lv_label_set_text(l, "SAVE");
+        lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    }
+    lv_timer_delete(timer);
+}
+
+static void flash_saved(lv_obj_t * btn, lv_obj_t * lbl)
+{
+    if(!btn || !lbl) return;
+    lv_label_set_text(lbl, "SAVED");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_CARRIER_UP), LV_PART_MAIN);
+    lv_timer_t * t = lv_timer_create(saved_flash_cb, 1500, NULL);
+    lv_timer_set_user_data(t, lbl);
+    lv_timer_resume(t);
+}
+
 /* a row with a switch on the right */
 static void toggle_row(lv_obj_t * parent, const char * name, const char * key)
 {
@@ -401,7 +449,7 @@ static void page_user(void)
     lv_obj_t * r = row(g_ui.content, "Name");
     lv_obj_t * ta = lv_textarea_create(r);
     lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_text(ta, chat_identity());
+    lv_textarea_set_placeholder_text(ta, chat_identity());
     lv_obj_set_pos(ta, VAL_X, 0);
     lv_obj_set_size(ta, 220, 17);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
@@ -410,15 +458,18 @@ static void page_user(void)
     lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
     lv_obj_add_event_cb(ta, other_ui_on_name, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
     g_ui.name_ta = ta;
+    g_ui.name_btn = save_button(r, on_save_name);
+    g_ui.name_btn_lbl = lv_obj_get_child(g_ui.name_btn, 0);
 
     lv_obj_t * r2 = row(g_ui.content, "Room");
     lv_obj_t * ta2 = lv_textarea_create(r2);
     lv_textarea_set_one_line(ta2, true);
-    lv_textarea_set_text(ta2, chat_room());
+    lv_textarea_set_placeholder_text(ta2, chat_room());
     lv_obj_set_pos(ta2, VAL_X, 0);
     lv_obj_set_size(ta2, 220, 17);
     lv_obj_set_style_bg_color(ta2, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
@@ -427,10 +478,13 @@ static void page_user(void)
     lv_obj_set_style_border_color(ta2, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_text_font(ta2, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_pad_all(ta2, 2, LV_PART_MAIN);
     lv_obj_add_event_cb(ta2, other_ui_on_room, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta2);
     g_ui.room_ta = ta2;
+    g_ui.room_btn = save_button(r2, on_save_room);
+    g_ui.room_btn_lbl = lv_obj_get_child(g_ui.room_btn, 0);
 
     section(g_ui.content, "MESSAGES");
     toggle_row(g_ui.content, "Show carrier tag", "show_carrier");
@@ -602,6 +656,7 @@ static void restyle_nav(void)
             lv_obj_set_style_border_width(g_ui.nav_box[i], on ? 3 : 0, st);
             lv_obj_set_style_outline_width(g_ui.nav_box[i], 0, st);
             lv_obj_set_style_shadow_width(g_ui.nav_box[i], 0, st);
+            lv_obj_set_style_bg_color(g_ui.nav_box[i], lv_color_hex(bg), LV_STATE_PRESSED);
         }
         lv_obj_set_style_text_color(g_ui.nav_lbl[i],
                                     lv_color_hex(on ? PDA_MSG_TEXT : PDA_TAB_TEXT),
@@ -626,6 +681,7 @@ static void restyle_subs(void)
             lv_obj_set_style_border_width(g_ui.sub_btn[i], on ? 2 : 1, st);
             lv_obj_set_style_outline_width(g_ui.sub_btn[i], 0, st);
             lv_obj_set_style_shadow_width(g_ui.sub_btn[i], 0, st);
+            lv_obj_set_style_bg_color(g_ui.sub_btn[i], lv_color_hex(bg), LV_STATE_PRESSED);
         }
         lv_obj_set_style_text_color(g_ui.sub_lbl[i],
                                     lv_color_hex(on ? PDA_MSG_TEXT : PDA_TAB_TEXT),
@@ -679,26 +735,61 @@ static void other_ui_tick(lv_timer_t * timer)
 
 /* ---------- the text fields on the User page ---------- */
 
+/* the name other devices see: saved, and applied to the chat at once */
+static void save_name(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt || !*txt) {          /* empty: keep the name we have */
+        lv_textarea_set_text(ta, "");
+        return;
+    }
+    prefs_set_str("name", txt);
+    chat_set_identity(txt);
+    lv_textarea_set_placeholder_text(ta, txt);
+    lv_textarea_set_text(ta, "");
+    flash_saved(g_ui.name_btn, g_ui.name_btn_lbl);
+}
+
+static void save_room(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt || !*txt) {          /* empty: keep the room we have */
+        lv_textarea_set_text(ta, "");
+        return;
+    }
+    prefs_set_str("room", txt);
+    chat_set_room(txt);
+    lv_textarea_set_placeholder_text(ta, txt);
+    lv_textarea_set_text(ta, "");
+    flash_saved(g_ui.room_btn, g_ui.room_btn_lbl);
+}
+
 void other_ui_on_name(lv_event_t * e)
 {
     LV_UNUSED(e);
     lv_obj_t * ta = lv_event_get_current_target(e);
-    const char * txt = lv_textarea_get_text(ta);
-    if(!txt || !*txt) return;
-    prefs_set_str("name", txt);
-    chat_set_identity(txt);
-    lv_textarea_set_text(ta, txt);
+    save_name(ta);
 }
 
 void other_ui_on_room(lv_event_t * e)
 {
     LV_UNUSED(e);
     lv_obj_t * ta = lv_event_get_current_target(e);
-    const char * txt = lv_textarea_get_text(ta);
-    if(!txt || !*txt) return;
-    prefs_set_str("room", txt);
-    chat_set_room(txt);
-    lv_textarea_set_text(ta, txt);
+    save_room(ta);
+}
+
+static void on_save_name(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    save_name(g_ui.name_ta);
+}
+
+static void on_save_room(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    save_room(g_ui.room_ta);
 }
 
 /* ---------- build ---------- */
@@ -722,9 +813,13 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the left column --- */
     for(int i = 0; i < PAGE_COUNT; i++) {
-        lv_obj_t * box = plain(root, NAV_W - 12, 26);
+        lv_obj_t * box = lv_button_create(root);
+        lv_obj_set_size(box, NAV_W - 12, 26);
         lv_obj_set_pos(box, 6, 8 + i * 30);
         lv_obj_set_style_pad_all(box, 8, LV_PART_MAIN);
+        lv_obj_set_style_radius(box, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(box, 0, LV_PART_MAIN);
+        lv_obj_set_style_outline_width(box, 0, LV_PART_MAIN);
         g_ui.nav_box[i] = box;
 
         lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
@@ -739,9 +834,13 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the sub tabs --- */
     for(int i = 0; i < 8; i++) {
-        lv_obj_t * b = plain(root, SUB_W, SUB_H);
+        lv_obj_t * b = lv_button_create(root);
+        lv_obj_set_size(b, SUB_W, SUB_H);
         lv_obj_set_pos(b, SUB_X0 + i * (SUB_W + SUB_GAP), 4);
         lv_obj_set_style_pad_all(b, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
+        lv_obj_set_style_outline_width(b, 0, LV_PART_MAIN);
         g_ui.sub_btn[i] = b;
 
         lv_obj_t * l = label(b, 0, 0, 0, "", &pda_font_mono_10, PDA_TAB_TEXT);

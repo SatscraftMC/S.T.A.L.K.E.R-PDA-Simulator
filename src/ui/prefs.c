@@ -142,7 +142,15 @@ void prefs_set_str(const char * key, const char * value)
 {
     pref_t * p = take(key);
     if(!p) return;
-    snprintf(p->value, sizeof(p->value), "%s", value ? value : "");
+    /* the file is one setting per line: a value with a control character in
+       it would break the file (and the name that comes out of it) */
+    size_t o = 0;
+    for(const char * src = value ? value : ""; *src && o + 1 < sizeof(p->value); src++) {
+        unsigned char c = (unsigned char)*src;
+        if(c < 0x20 || c == 0x7f) continue;
+        p->value[o++] = *src;
+    }
+    p->value[o] = 0;
     prefs_save();
 }
 
