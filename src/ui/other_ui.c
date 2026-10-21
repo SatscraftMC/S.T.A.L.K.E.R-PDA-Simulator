@@ -31,11 +31,11 @@
  */
 
 #define PAGE_COUNT   4
-#define NAV_W        186
-#define SUB_H        19
-#define SUB_X0       (NAV_W + 10)
-#define SUB_W        92
-#define SUB_GAP      3
+#define NAV_W        180          /* the sections column */
+#define SUB_W        112          /* the sub tabs column, vertical */
+#define SUB_H        22
+#define SUB_X0       (NAV_W + 8)
+#define PAGE_X       (SUB_X0 + SUB_W + 12)
 #define ROW_H        18
 #define VAL_X        158
 
@@ -58,6 +58,9 @@ static void other_ui_on_name(lv_event_t * e);
 static void other_ui_on_room(lv_event_t * e);
 static void on_save_name(lv_event_t * e);
 static void on_save_room(lv_event_t * e);
+static void on_save_channel(lv_event_t * e);
+static void other_ui_on_channel(lv_event_t * e);
+static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb);
 static void on_toggle_click(lv_event_t * e);
 
 typedef struct {
@@ -84,6 +87,9 @@ typedef struct {
 
     lv_obj_t * name_ta;
     lv_obj_t * room_ta;
+    lv_obj_t * chan_ta;
+    lv_obj_t * chan_btn;
+    lv_obj_t * chan_btn_lbl;
     lv_obj_t * name_btn;
     lv_obj_t * room_btn;
     lv_obj_t * name_btn_lbl;
@@ -198,7 +204,7 @@ static int collect_states(net_state_t * out, int max)
         const chat_transport_t * tr = chat_transport_get(i);
         if(!tr) continue;
         out[n].name = tr->label;
-        out[n].up = tr->up;
+        out[n].up = (tr->state == CHAT_CARRIER_ONLINE);
         out[n].detail = tr->status;
         n++;
     }
@@ -265,10 +271,9 @@ static void page_info(void)
     for(int i = 0; i < n; i++) {
         char key[24];
         snprintf(key, sizeof(key), "net%d", i);
-        lv_obj_t * r = live_row(g_ui.content, st[i].name, key,
-                                st[i].up ? "CONNECTED" : "OFFLINE",
-                                st[i].up ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
-        (void)r;
+        live_row(g_ui.content, st[i].name, key,
+                 st[i].up ? "ONLINE" : "OFFLINE",
+                 st[i].up ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
     }
 
     section(g_ui.content, "HARDWARE");
@@ -288,6 +293,31 @@ static void page_bitchat(void)
     char buf[128];
 
     section(g_ui.content, "BITCHAT - LOCAL MESH");
+
+    lv_obj_t * r = row(g_ui.content, "Channel");
+    lv_obj_t * ta = lv_textarea_create(r);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_placeholder_text(ta, chat_mesh_channel());
+    lv_obj_set_pos(ta, VAL_X, 0);
+    lv_obj_set_size(ta, 220, 17);
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
+    /* the cursor: a bright line where the next character goes */
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
+    lv_obj_add_event_cb(ta, other_ui_on_channel, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
+    g_ui.chan_ta = ta;
+    g_ui.chan_btn = save_button(r, on_save_channel);
+    g_ui.chan_btn_lbl = lv_obj_get_child(g_ui.chan_btn, 0);
+
     snprintf(buf, sizeof(buf), "%s", getenv("PDA_BITCHAT_PORT") ? getenv("PDA_BITCHAT_PORT")
                                                                  : "2425");
     live_row(g_ui.content, "Mesh port", "bit_port", buf, PDA_MSG_TEXT);
@@ -295,7 +325,6 @@ static void page_bitchat(void)
              (sock && *sock) ? sock : ((host && *host) ? host : "not connected"),
              (sock || host) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
     live_row(g_ui.content, "Node name", "bit_name", chat_identity(), PDA_MSG_TEXT);
-    live_row(g_ui.content, "Channel", "bit_chan", "#pda-zone", PDA_MSG_TEXT);
 
     section(g_ui.content, "LINK");
     live_row(g_ui.content, "State", "bit_state", "offline", PDA_CARRIER_DOWN);
@@ -472,6 +501,10 @@ static void page_user(void)
     lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
+    /* the cursor: a bright line where the next character goes */
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
     lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
     lv_obj_add_event_cb(ta, other_ui_on_name, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
@@ -492,6 +525,9 @@ static void page_user(void)
     lv_obj_set_style_text_font(ta2, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_bg_color(ta2, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta2, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
     lv_obj_set_style_pad_all(ta2, 2, LV_PART_MAIN);
     lv_obj_add_event_cb(ta2, other_ui_on_room, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta2);
@@ -531,6 +567,7 @@ static void build_content(void)
     g_ui.n_tog = 0;
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
+    g_ui.chan_ta = NULL;
 
     if(g_ui.page == PAGE_SETTINGS) page_settings(g_ui.sub);
     else if(g_ui.page == PAGE_CONNECTIONS) {
@@ -569,9 +606,11 @@ void other_ui_refresh(void)
             int idx = key[3] - '0';
             net_state_t st[8];
             int n = collect_states(st, 8);
-            if(idx < n)
-                set_live(i, st[idx].up ? "CONNECTED" : "OFFLINE",
-                         st[idx].up ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
+            if(idx < n) {
+                const chat_transport_t * tr = chat_transport_get(idx);
+                set_live(i, tr ? chat_carrier_state_name(tr->state) : "OFFLINE",
+                         tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN);
+            }
         }
         else if(!strcmp(key, "bit_state")) {
             const chat_transport_t * tr = NULL;
@@ -579,8 +618,8 @@ void other_ui_refresh(void)
                 const chat_transport_t * t = chat_transport_get(k);
                 if(t && !strcmp(t->tag, "BIT")) tr = t;
             }
-            set_live(i, (tr && tr->up) ? "ONLINE" : "OFFLINE",
-                     (tr && tr->up) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
+            set_live(i, tr ? chat_carrier_state_name(tr->state) : "OFFLINE",
+                     tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN);
         }
         else if(!strcmp(key, "fips_state")) {
             const chat_transport_t * tr = NULL;
@@ -588,8 +627,8 @@ void other_ui_refresh(void)
                 const chat_transport_t * t = chat_transport_get(k);
                 if(t && !strcmp(t->tag, "FIPS")) tr = t;
             }
-            set_live(i, (tr && tr->up) ? "ONLINE" : "OFFLINE",
-                     (tr && tr->up) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
+            set_live(i, tr ? chat_carrier_state_name(tr->state) : "OFFLINE",
+                     tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN);
         }
         else if(!strcmp(key, "wifi")) {
             bool up = wifi_up();
@@ -697,11 +736,11 @@ static void restyle_subs(void)
             st = k ? LV_STATE_FOCUSED : LV_PART_MAIN;
             lv_obj_set_style_bg_color(g_ui.sub_btn[i], lv_color_hex(bg), st);
             lv_obj_set_style_bg_opa(g_ui.sub_btn[i], LV_OPA_COVER, st);
-            lv_obj_set_style_border_side(g_ui.sub_btn[i], LV_BORDER_SIDE_TOP, st);
+            lv_obj_set_style_border_side(g_ui.sub_btn[i], LV_BORDER_SIDE_LEFT, st);
             lv_obj_set_style_border_color(g_ui.sub_btn[i],
                                           lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_EDGE),
                                           st);
-            lv_obj_set_style_border_width(g_ui.sub_btn[i], on ? 2 : 1, st);
+            lv_obj_set_style_border_width(g_ui.sub_btn[i], on ? 3 : 0, st);
             lv_obj_set_style_outline_width(g_ui.sub_btn[i], 0, st);
             lv_obj_set_style_shadow_width(g_ui.sub_btn[i], 0, st);
             lv_obj_set_style_bg_color(g_ui.sub_btn[i], lv_color_hex(bg), LV_STATE_PRESSED);
@@ -815,6 +854,35 @@ static void on_save_room(lv_event_t * e)
     save_room(g_ui.room_ta);
 }
 
+/* the channel the local mesh talks on */
+static void save_channel(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt || !*txt) {          /* empty: keep the channel we have */
+        lv_textarea_set_text(ta, "");
+        return;
+    }
+    prefs_set_str("mesh_chan", txt);
+    chat_set_mesh_channel(txt);
+    lv_textarea_set_placeholder_text(ta, txt);
+    lv_textarea_set_text(ta, "");
+    flash_saved(g_ui.chan_btn, g_ui.chan_btn_lbl);
+}
+
+void other_ui_on_channel(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    lv_obj_t * ta = lv_event_get_current_target(e);
+    save_channel(ta);
+}
+
+static void on_save_channel(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    save_channel(g_ui.chan_ta);
+}
+
 /* ---------- build ---------- */
 
 lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
@@ -849,6 +917,8 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
                              PDA_TAB_TEXT);
         lv_obj_set_pos(l, 4, 4);
+        lv_obj_set_width(l, NAV_W - 12 - 16);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         g_ui.nav_lbl[i] = l;
 
         lv_obj_set_clickable(box, true);
@@ -856,11 +926,11 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         if(group) lv_group_add_obj(group, box);
     }
 
-    /* --- the sub tabs --- */
+    /* --- the sub tabs, down the second column --- */
     for(int i = 0; i < 8; i++) {
         lv_obj_t * b = lv_button_create(root);
         lv_obj_set_size(b, SUB_W, SUB_H);
-        lv_obj_set_pos(b, SUB_X0 + i * (SUB_W + SUB_GAP), 4);
+        lv_obj_set_pos(b, SUB_X0, 8 + i * (SUB_H + 4));
         lv_obj_set_style_pad_all(b, 2, LV_PART_MAIN);
         lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
@@ -881,8 +951,8 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the page --- */
     lv_obj_t * content = lv_obj_create(root);
-    lv_obj_set_pos(content, SUB_X0 - 6, 4 + SUB_H + 6);
-    lv_obj_set_size(content, 800 - SUB_X0 + 6, 400);
+    lv_obj_set_pos(content, PAGE_X, 4);
+    lv_obj_set_size(content, 800 - PAGE_X, 400);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(content, 0, LV_PART_MAIN);

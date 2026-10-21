@@ -161,7 +161,7 @@ static void add_row(const chat_msg_t * m)
             tags[0] = 0;
             for(int i = 0; i < chat_transport_count(); i++) {
                 const chat_transport_t * tr = chat_transport_get(i);
-                if(!tr || !tr->up) continue;
+                if(!tr || tr->state != CHAT_CARRIER_ONLINE) continue;
                 if(tags[0]) strncat(tags, " ", sizeof(tags) - strlen(tags) - 1);
                 strncat(tags, tr->tag, sizeof(tags) - strlen(tags) - 1);
             }
@@ -224,11 +224,11 @@ static void refresh(void)
     for(int i = 0; i < n && i < CHAT_TRANSPORT_MAX; i++) {
         const chat_transport_t * tr = chat_transport_get(i);
         if(!tr) continue;
-        uint32_t col = tr->up ? PDA_CARRIER_UP : PDA_CARRIER_DOWN;
+        uint32_t col = lv_carrier_color(tr->state);
         if(g_ui.badge[i]) {
             lv_obj_set_style_text_color(g_ui.badge[i], lv_color_hex(col), LV_PART_MAIN);
         }
-        if(tr->up && tr->status[0]) {
+        if(tr->state == CHAT_CARRIER_ONLINE && tr->status[0]) {
             if(status[0]) strncat(status, "  /  ", sizeof(status) - strlen(status) - 1);
             strncat(status, tr->status, sizeof(status) - strlen(status) - 1);
         }
@@ -384,6 +384,9 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_text_font(ta, &pda_font_mono_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
     lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);

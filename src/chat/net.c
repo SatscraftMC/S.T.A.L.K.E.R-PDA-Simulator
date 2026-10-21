@@ -50,8 +50,12 @@ static bool net_connect(chat_transport_t * t)
 {
     net_t * n = (net_t *)t->priv;
     time_t now = time(NULL);
-    if(n->last_try && now - n->last_try < n->backoff) return false;
+    if(n->last_try && now - n->last_try < n->backoff) {
+        t->state = CHAT_CARRIER_CONNECTING;   /* waiting for the next try */
+        return false;
+    }
     n->last_try = now;
+    t->state = CHAT_CARRIER_CONNECTING;
 
     char portbuf[16];
     snprintf(portbuf, sizeof(portbuf), "%d", n->port);
@@ -103,6 +107,7 @@ static bool net_connect(chat_transport_t * t)
     ls_write_line(&n->ls, hello);
 
     n->backoff = 0;
+    t->state = CHAT_CARRIER_ONLINE;
     snprintf(t->status, sizeof(t->status), "relay %.30s:%d", n->host, n->port);
     return true;
 }
@@ -114,6 +119,7 @@ static void net_disconnect(chat_transport_t * t)
         fprintf(stderr, "[chat] net disconnected (fd %d)\n", n->ls.fd);
     if(n->ls.fd >= 0) close(n->ls.fd);
     ls_init(&n->ls);
+    t->state = CHAT_CARRIER_OFFLINE;
     snprintf(t->status, sizeof(t->status), "no relay");
 }
 
@@ -127,7 +133,6 @@ static int net_poll(chat_transport_t * t)
         if(r <= 0) {
             if(r < 0) {
                 net_disconnect(t);
-                t->up = false;
             }
             break;
         }
@@ -157,7 +162,6 @@ static bool net_send(chat_transport_t * t, const char * text, const char * id)
         if(getenv("PDA_DEBUG"))
             fprintf(stderr, "[chat] net write failed: %s\n", strerror(errno));
         net_disconnect(t);
-        t->up = false;
         return false;
     }
     return true;
@@ -178,6 +182,7 @@ void chat_net_register(void)
     s_tr.poll = net_poll;
     s_tr.send = net_send;
     s_tr.priv = &s_net;
+    s_tr.state = CHAT_CARRIER_OFFLINE;
     snprintf(s_tr.status, sizeof(s_tr.status), "no relay");
     chat_add_transport(&s_tr);
 }

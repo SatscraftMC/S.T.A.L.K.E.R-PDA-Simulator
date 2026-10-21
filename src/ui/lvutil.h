@@ -2,6 +2,8 @@
 #define PDA_LVUTIL_H
 
 #include "lvgl/lvgl.h"
+#include "chat/chat.h"
+#include "ui/palette.h"
 
 /* Deleting an object that has a running animation leaves that animation
    pointing at freed memory - and the default theme puts a transition on every
@@ -38,6 +40,15 @@ static inline void lv_no_transition(lv_obj_t * obj)
     }
     lv_obj_set_style_transition(obj, &tr, LV_PART_MAIN);
     lv_obj_set_style_transition(obj, &tr, LV_STATE_PRESSED);
+}
+
+/* a carrier's colour: green when it is up, grey while it tries, red when it
+   is not there */
+static inline uint32_t lv_carrier_color(chat_carrier_state_t st)
+{
+    if(st == CHAT_CARRIER_ONLINE) return PDA_CARRIER_UP;
+    if(st == CHAT_CARRIER_CONNECTING) return PDA_CARRIER_WAIT;
+    return PDA_CARRIER_DOWN;
 }
 
 #endif

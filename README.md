@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.0.4-pre-alpha**
+**v0.0.5-pre-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -32,10 +32,11 @@ on a desktop environment.
   and everything that comes in shows up in the same log, tagged with the
   carrier it arrived on.
 - **The Other tab** is the device's control panel: a column of sections
-  (Settings, Connections, User, Extras), sub-tabs across the top of the pane,
-  and the page below that. *Connections* says what is connected and shows the
-  settings of each system; *User* is where the name other devices see and the
-  message preferences live.
+  (Settings, Connections, User, Extras), a column of sub-tabs, and the page
+  below that. *Connections* says what is connected (green, grey while it
+  tries, red when it is not there) and shows the settings of each system;
+  *User* is where the name other devices see and the message preferences live.
+- **A recenter button** on the map puts the view back on the blue dot.
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
@@ -57,7 +58,7 @@ Everything rides the same envelope on all three carriers:
 
 | carrier | what it is | how it is wired |
 |---|---|---|
-| **BIT** | the local mesh - no server, no account, whoever is in earshot is in the room | UDP broadcast on port 2425 (the port the bitchat mesh uses). A real bitchat node can be wired in through a bridge: `PDA_BITCHAT_SOCK=/tmp/pda-bitchat.sock` |
+| **BIT** | the local mesh - no server, no account, whoever is in earshot is in the room | UDP broadcast on port 2425 (the port the bitchat mesh uses), on one channel (`#mesh` by default, changeable). A real bitchat node can be wired in through a bridge: `PDA_BITCHAT_SOCK=/tmp/pda-bitchat.sock` |
 | **FIPS** | the FIPS mesh (Free Internetworking Peering System) | the daemon's **native datagram API**: `listen`/`connect` over the api socket, one datagram per message, no framing |
 | **NET** | the internet | a relay (`tools/relay.py`), which can itself bridge to an ntfy topic |
 
@@ -90,14 +91,16 @@ sub-tabs belong to the section: *Settings* has General / Advanced / Language /
 Themes, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS / System.
 
 **Connections → Info** is the one that matters: it says whether each system
-is up - the local mesh, the FIPS mesh, the internet, WiFi, GPS - and the
-other *Connections* pages show the settings of that system (the mesh port and
-the bridge, the fips sockets and the FSP port, the WiFi interface and its
-address, the live GPS data, the version and where the settings file lives).
+is up - **green** when it is, **grey** while it is trying and **red** when it
+is not there. The other *Connections* pages show the settings of that system
+(the mesh channel, port and bridge, the fips sockets and the FSP port, the
+WiFi interface and its address, the live GPS data, the version and where the
+settings file lives).
 
 **User** holds the personalisation: the name other devices see on your
 messages and the room you talk in (both editable, both remembered), and the
-switches for what the message log shows.
+switches for what the message log shows. The carrier badges in the top right
+of the Messages tab use the same colours: green, grey, red.
 
 The settings are remembered in `~/.config/pda/prefs.conf` (override with
 `PDA_PREFS`), so they survive a restart.
@@ -112,6 +115,7 @@ The settings are remembered in `~/.config/pda/prefs.conf` (override with
 | `PDA_RELAY_HOST` / `PDA_RELAY_PORT` | where the NET relay is (default `127.0.0.1:7788`) |
 | `PDA_BITCHAT_SOCK` / `PDA_BITCHAT_HOST` / `PDA_BITCHAT_PORT` | a bitchat bridge to plug into the local mesh |
 | `PDA_BITCHAT_PORT` | the mesh port (default 2425) |
+| `PDA_MESH_CHANNEL` | the channel the local mesh talks on (default `mesh`) |
 | `PDA_FIPS_SOCK` / `PDA_FIPS_CTL` | the fips daemon's api and control sockets |
 | `PDA_FIPS_PORT` | the FSP port to talk on (default 4600) |
 | `PDA_START_TAB` | start on a given tab (1 = Messages, 6 = Other) - a test hook |
@@ -208,7 +212,7 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
 | `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
 | `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
-| `tools/ui_test.py` | bug hunt for the UI: every tab and every page, the name and the room being saved, a broken settings file, a name that would break the wire format, and driving the app hard |
+| `tools/ui_test.py` | bug hunt for the UI: every tab and every page, the name and the room being saved, a broken settings file, a name that would break the wire format, the mesh channel, the recenter button, and driving the app hard |
 | `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
 | `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |
 | `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |

@@ -505,7 +505,7 @@ static void * fips_worker(void * arg)
             pthread_mutex_lock(&s_fips.lock);
             snprintf(s_tr.status, sizeof(s_tr.status), "no daemon");
             pthread_mutex_unlock(&s_fips.lock);
-            s_tr.up = false;
+            s_tr.state = CHAT_CARRIER_OFFLINE;
             sleep(3);
             continue;
         }
@@ -521,12 +521,12 @@ static void * fips_worker(void * arg)
                 pthread_mutex_lock(&s_fips.lock);
                 snprintf(s_tr.status, sizeof(s_tr.status), "daemon busy");
                 pthread_mutex_unlock(&s_fips.lock);
-                s_tr.up = false;
+                s_tr.state = CHAT_CARRIER_CONNECTING;
                 sleep(3);
                 continue;
             }
             s_fips.listener = fd;
-            s_tr.up = true;
+            s_tr.state = CHAT_CARRIER_ONLINE;
             pthread_mutex_lock(&s_fips.lock);
             snprintf(s_tr.status, sizeof(s_tr.status), "mesh port %d", s_fips.port);
             pthread_mutex_unlock(&s_fips.lock);
@@ -584,7 +584,9 @@ static bool fips_connect(chat_transport_t * t)
 {
     if(s_fips.thread_running) {
         struct stat st;
-        return stat(s_fips.api_sock, &st) == 0;
+        bool there = (stat(s_fips.api_sock, &st) == 0);
+        if(!there) t->state = CHAT_CARRIER_OFFLINE;
+        return there;
     }
     resolve_paths();
     if(s_fips.port <= 0) s_fips.port = FIPS_DEFAULT_PORT;
@@ -666,6 +668,7 @@ void chat_fips_register(void)
     s_tr.poll = fips_poll;
     s_tr.send = fips_send;
     s_tr.priv = &s_fips;
+    s_tr.state = CHAT_CARRIER_OFFLINE;
     snprintf(s_tr.status, sizeof(s_tr.status), "no daemon");
     chat_add_transport(&s_tr);
 }

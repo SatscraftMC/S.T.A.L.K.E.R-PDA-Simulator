@@ -50,8 +50,8 @@
 #define PDA_MSG_THEM            0xC9A94E
 #define PDA_MSG_SYS             0x6C6E64
 #define PDA_MSG_ACCENT          0xC9A227
-#define PDA_CARRIER_UP          0x7C9E52
-#define PDA_CARRIER_DOWN        0x6B4A42
-#define PDA_CARRIER_WAIT        0x9A7C36
+#define PDA_CARRIER_UP          0x7C9E52   /* green: it is up */
+#define PDA_CARRIER_DOWN        0xB05545   /* red: it is not there */
+#define PDA_CARRIER_WAIT        0x8B8D85   /* grey: it is trying */
 
 #endif

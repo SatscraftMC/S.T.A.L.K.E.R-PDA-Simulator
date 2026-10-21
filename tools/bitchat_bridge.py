@@ -16,9 +16,10 @@ Without the package (or without a bluetooth adapter) the bridge still runs and
 still speaks the protocol, so the app's BIT path can be exercised end to end;
 it just has no mesh behind it. The status line says which of the two it is.
 
-The mesh side is a plain channel: every message goes out on the channel named
-by --channel (default "pda-zone"), which is what the real bitchat app calls a
-public channel.
+The mesh side is a plain channel: every message goes out on the channel it
+carries ("chan" in the envelope, which is the channel the PDA is set to -
+"mesh" by default), which is what the real bitchat app calls a public
+channel. --channel is the fallback for messages that come without one.
 """
 import argparse
 import json
@@ -104,8 +105,10 @@ class Bridge:
         text = msg.get("text", "")
         if not text:
             return
-        self.log("app ->", text)
-        self.to_mesh(msg, text)
+        # the channel the PDA is set to decides where it goes
+        chan = msg.get("chan") or self.channel
+        self.log("app ->", chan, text)
+        self.to_mesh(msg, text, chan)
 
     def to_app(self, payload):
         data = (json.dumps(payload, separators=(",", ":")) + "\n").encode()
@@ -121,10 +124,11 @@ class Bridge:
 
     # ---------- the mesh side ----------
 
-    def to_mesh(self, msg, text):
+    def to_mesh(self, msg, text, chan=None):
         if not HAVE_BITCHAT:
             self.log("no bitchat package - message dropped")
             return
+        chan = chan or self.channel
         try:
             m = bitchat_pkg.BitchatMessage(
                 id=msg.get("id", uuid.uuid4().hex[:8]),
@@ -137,7 +141,7 @@ class Bridge:
                 recipient_nickname=None,
                 sender_peer_id=self.peer_id,
                 mentions=[],
-                channel=self.channel,
+                channel=chan,
                 encrypted_content=None,
                 is_encrypted=False,
                 delivery_status="pending",
@@ -182,7 +186,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--socket", default="/tmp/pda-bitchat.sock")
-    ap.add_argument("--channel", default="pda-zone")
+    ap.add_argument("--channel", default="mesh")
     ap.add_argument("--peer-id", default=None, help="48 hex chars; random if omitted")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()

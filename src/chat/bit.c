@@ -163,6 +163,7 @@ static bool bit_connect(chat_transport_t * t)
         collect_broadcasts(b);
     }
 
+    t->state = CHAT_CARRIER_ONLINE;
     snprintf(t->status, sizeof(t->status), "mesh %d", b->port);
 
     if(b->bridge_want && b->bridge.fd < 0) {
@@ -181,6 +182,7 @@ static void bit_disconnect(chat_transport_t * t)
     bit_t * b = (bit_t *)t->priv;
     if(b->udp >= 0) { close(b->udp); b->udp = -1; }
     if(b->bridge.fd >= 0) { close(b->bridge.fd); ls_init(&b->bridge); }
+    t->state = CHAT_CARRIER_OFFLINE;
     snprintf(t->status, sizeof(t->status), "mesh down");
 }
 
@@ -191,10 +193,14 @@ static void deliver_line(chat_transport_t * t, const char * line)
     if(strcmp(type, "msg") != 0) return;
 
     char id[CHAT_ID_MAX] = "", from[CHAT_NAME_MAX] = "", text[CHAT_TEXT_MAX] = "";
+    char chan[CHAT_ROOM_MAX] = "";
     json_get(line, "id", id, sizeof(id));
     json_get(line, "from", from, sizeof(from));
     json_get(line, "text", text, sizeof(text));
+    json_get(line, "chan", chan, sizeof(chan));
     if(!text[0]) return;
+    /* the mesh carries one channel: what is said elsewhere is not for us */
+    if(chan[0] && strcmp(chan, chat_mesh_channel()) != 0) return;
     chat_deliver(chat_transport_index(t), id, from, text);
 }
 
@@ -273,6 +279,7 @@ void chat_bit_register(void)
     s_tr.poll = bit_poll;
     s_tr.send = bit_send;
     s_tr.priv = &s_bit;
+    s_tr.state = CHAT_CARRIER_OFFLINE;
     snprintf(s_tr.status, sizeof(s_tr.status), "mesh down");
     chat_add_transport(&s_tr);
 }

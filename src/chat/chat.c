@@ -23,6 +23,7 @@ static int s_n_tr = 0;
 
 static char s_id[CHAT_NAME_MAX] = "STALKER";
 static char s_room[CHAT_ROOM_MAX] = "SECTOR";
+static char s_chan[CHAT_ROOM_MAX] = "mesh";
 
 /* recently seen ids, for de-duplicating the same message arriving on two
    carriers at once (a relay that bridges, for instance) */
@@ -85,9 +86,29 @@ void chat_set_room(const char * room)
 void chat_add_transport(chat_transport_t * t)
 {
     if(!t || s_n_tr >= CHAT_TRANSPORT_MAX) return;
-    t->up = false;
+    t->state = CHAT_CARRIER_OFFLINE;
     snprintf(t->status, sizeof(t->status), "offline");
     s_tr[s_n_tr++] = t;
+}
+
+const char * chat_carrier_state_name(chat_carrier_state_t st)
+{
+    switch(st) {
+        case CHAT_CARRIER_ONLINE: return "ONLINE";
+        case CHAT_CARRIER_CONNECTING: return "CONNECTING";
+        default: return "OFFLINE";
+    }
+}
+
+void chat_set_mesh_channel(const char * chan)
+{
+    if(!chan || !*chan) return;
+    snprintf(s_chan, sizeof(s_chan), "%.*s", (int)sizeof(s_chan) - 1, chan);
+}
+
+const char * chat_mesh_channel(void)
+{
+    return s_chan;
 }
 
 int chat_transport_count(void)
@@ -123,6 +144,13 @@ void chat_init(void)
     else {
         const char * saved = prefs_str("room", NULL);
         if(saved && *saved) chat_set_room(saved);
+    }
+
+    const char * chan = getenv("PDA_MESH_CHANNEL");
+    if(chan && *chan) chat_set_mesh_channel(chan);
+    else {
+        const char * saved = prefs_str("mesh_chan", NULL);
+        if(saved && *saved) chat_set_mesh_channel(saved);
     }
 
     chat_bit_register();
@@ -247,13 +275,15 @@ void chat_envelope(char * out, size_t outn, const char * id, const char * sender
                    const char * text, long ts)
 {
     char e_id[CHAT_ID_MAX * 6], e_from[CHAT_NAME_MAX * 6], e_text[CHAT_TEXT_MAX * 6];
+    char e_chan[CHAT_ROOM_MAX * 6];
     json_escape(id ? id : "", e_id, sizeof(e_id));
     json_escape(sender ? sender : "", e_from, sizeof(e_from));
     json_escape(text ? text : "", e_text, sizeof(e_text));
+    json_escape(s_chan, e_chan, sizeof(e_chan));
     snprintf(out, outn,
              "{\"v\":1,\"t\":\"msg\",\"id\":\"%s\",\"from\":\"%s\",\"room\":\"%s\","
-             "\"text\":\"%s\",\"ts\":%ld}",
-             e_id, e_from, s_room, e_text, ts);
+             "\"chan\":\"%s\",\"text\":\"%s\",\"ts\":%ld}",
+             e_id, e_from, s_room, e_chan, e_text, ts);
 }
 
 bool chat_send(const char * text)
@@ -266,7 +296,7 @@ bool chat_send(const char * text)
     bool any = false;
     for(int i = 0; i < s_n_tr; i++) {
         chat_transport_t * t = s_tr[i];
-        if(!t->up || !t->send) continue;
+        if(t->state != CHAT_CARRIER_ONLINE || !t->send) continue;
         if(t->send(t, text, id)) any = true;
     }
 
@@ -292,13 +322,9 @@ void chat_poll(void)
     for(int i = 0; i < s_n_tr; i++) {
         chat_transport_t * t = s_tr[i];
         if(!t) continue;
-        if(!t->up && t->connect) {
-            if(t->connect(t)) {
-                t->up = true;
-                if(getenv("PDA_DEBUG"))
-                    fprintf(stderr, "[chat] %s up\n", t->tag);
-            }
+        if(t->state != CHAT_CARRIER_ONLINE && t->connect) {
+            t->connect(t);          /* the carrier says what state it is in */
         }
-        if(t->up && t->poll) t->poll(t);
+        if(t->state == CHAT_CARRIER_ONLINE && t->poll) t->poll(t);
     }
 }

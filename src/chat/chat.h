@@ -44,6 +44,13 @@ typedef struct {
 } chat_msg_t;
 
 /* A carrier. The bus never blocks on one: poll() must return quickly. */
+/* what a carrier is doing right now */
+typedef enum {
+    CHAT_CARRIER_OFFLINE = 0,     /* red: nothing there */
+    CHAT_CARRIER_CONNECTING = 1,  /* grey: trying */
+    CHAT_CARRIER_ONLINE = 2       /* green: up */
+} chat_carrier_state_t;
+
 typedef struct chat_transport {
     const char * tag;         /* short label shown in the UI: "NET" */
     const char * label;       /* long label: "Internet" */
@@ -51,7 +58,7 @@ typedef struct chat_transport {
     void (*disconnect)(struct chat_transport * t);
     int  (*poll)(struct chat_transport * t);   /* deliver what arrived */
     bool (*send)(struct chat_transport * t, const char * text, const char * id);
-    bool up;                  /* the carrier is usable right now */
+    chat_carrier_state_t state;
     char status[48];          /* one line for the UI */
     void * priv;
 } chat_transport_t;
@@ -90,5 +97,13 @@ int chat_fips_peer_count(void);
 /* Build the wire envelope for a message. */
 void chat_envelope(char * out, size_t outn, const char * id, const char * sender,
                    const char * text, long ts);
+
+/* what a carrier is doing, in words */
+const char * chat_carrier_state_name(chat_carrier_state_t st);
+
+/* The channel the local mesh talks on ("mesh" by default, shown as #mesh).
+   The mesh carrier only carries the messages of its own channel. */
+void chat_set_mesh_channel(const char * chan);
+const char * chat_mesh_channel(void);
 
 #endif

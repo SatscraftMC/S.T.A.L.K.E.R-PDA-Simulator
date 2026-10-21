@@ -31,7 +31,11 @@ SHOTS = "/tmp/opencode/uishot"
 PREFS = os.path.expanduser("~/.config/pda/prefs.conf")
 OX, OY = 560, 300           # the window's client origin on this desktop
 DY = 45                     # the panel starts under the tab row and the gap
-NAME_Y = 99                 # the name field on the User page
+NAME_Y = 74                 # the name field on the User page
+NAME_X = 550                # the name field, in screen coordinates
+SAVE_X = 725                # the SAVE button next to it
+SUB_X = 244                 # the sub tab column
+SUB_Y0 = 64                 # the first sub tab
 
 FAIL = []
 
@@ -204,12 +208,12 @@ def test_name_save():
     try:
         # the name field (the content starts at app x=190, the value column
         # 158 into it) and the SAVE button to its right
-        click(450, NAME_Y)
+        click(NAME_X, NAME_Y)
         time.sleep(0.3)
         type_text("Satscraft")
         time.sleep(0.4)
         shot("name_typed")
-        click(605, NAME_Y)
+        click(SAVE_X, NAME_Y)
         time.sleep(0.8)
         shot("name_saved")
         saved = ""
@@ -294,7 +298,7 @@ def test_hard_use():
         click(120 + 6 * 80, 22)
         time.sleep(0.4)
         for sub in range(6):
-            click(206 + 95 * sub + 40, DY + 13)
+            click(SUB_X, SUB_Y0 + 26 * sub)
         time.sleep(0.5)
         # and the nav column
         for y in (20, 50, 80, 110):
@@ -303,9 +307,9 @@ def test_hard_use():
         # save a name and walk away from the page while it flashes
         click(40, DY + 80)          # the User page
         time.sleep(0.3)
-        click(450, NAME_Y)          # the name field
+        click(NAME_X, NAME_Y)       # the name field
         type_text("Satscraft")
-        click(605, NAME_Y)          # SAVE
+        click(SAVE_X, NAME_Y)       # SAVE
         click(40, DY + 50)          # and straight to another page
         time.sleep(1.8)             # long enough for the flash to fire
         click(40, DY + 80)          # and back again
@@ -398,6 +402,98 @@ def test_many_messages():
             relay.kill()
 
 
+def test_mesh_channel():
+    print("9. the mesh channel", flush=True)
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    peer.bind(("127.0.0.2", 2425))
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                            "PDA_MESH_CHANNEL": "mesh"}, "chan")
+    try:
+        time.sleep(2.6)
+        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "c1", "from": "ROOK",
+                                  "room": "SECTOR", "chan": "other",
+                                  "text": "not for us",
+                                  "ts": int(time.time())}) + "\n").encode(),
+                    ("127.0.0.1", 2425))
+        time.sleep(1.2)
+        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "c2", "from": "ROOK",
+                                  "room": "SECTOR", "chan": "mesh",
+                                  "text": "for the mesh",
+                                  "ts": int(time.time())}) + "\n").encode(),
+                    ("127.0.0.1", 2425))
+        time.sleep(1.5)
+        data = ""
+        try:
+            with open(logpath) as fh:
+                data = fh.read()
+        except OSError:
+            pass
+        note("recv via BIT from ROOK: for the mesh" in data,
+             "the message of our channel comes in")
+        note("not for us" not in data,
+             "the message of another channel is ignored")
+    finally:
+        stop(p, f)
+        peer.close()
+
+
+def test_recenter():
+    print("10. the map recenter button", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478",
+                            "PDA_GPS_LON": "-16.9193"}, "recenter")
+    try:
+        time.sleep(3.0)
+
+        def blue_dot(path):
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            w, h = im.size
+            px = im.load()
+            xs, ys = [], []
+            for y in range(90, h - 60):        # the buttons live at the bottom
+                for x in range(0, w - 120):   # ... and on the right
+                    r, g, b = px[x, y]
+                    if b > 225 and 35 < r < 95 and 145 < g < 195:
+                        xs.append(x)
+                        ys.append(y)
+            if len(xs) < 20:
+                return None
+            return sum(xs) // len(xs), sum(ys) // len(ys)
+
+        before = blue_dot(shot("rc_before"))
+        # drag the map away
+        drag_code = """
+import time
+from Xlib import display, X
+from Xlib.ext import xtest
+d = display.Display()
+x0, y0 = %d, %d
+xtest.fake_input(d, X.MotionNotify, x=x0, y=y0); d.sync(); time.sleep(0.1)
+xtest.fake_input(d, X.ButtonPress, 1); d.sync(); time.sleep(0.1)
+for i in range(1, 13):
+    xtest.fake_input(d, X.MotionNotify, x=x0 + 8 * i, y=y0 + 5 * i)
+    d.sync(); time.sleep(0.04)
+xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.4)
+""" % (OX + 400, OY + 275)
+        subprocess.run([sys.executable, "-c", drag_code], capture_output=True)
+        time.sleep(0.8)
+        dragged = blue_dot(shot("rc_dragged"))
+        # the recenter button: the third one down on the right
+        click(770, 69 + 298 + 14)
+        time.sleep(1.0)
+        after = blue_dot(shot("rc_after"))
+        note(dragged is not None and before is not None and
+             abs(dragged[0] - before[0]) > 30,
+             f"the drag moved the dot ({before} -> {dragged})")
+        note(after is not None and abs(after[0] - 400) < 25 and
+             abs(after[1] - (275 + 32)) < 25,
+             f"the recenter button put it back in the middle ({after})")
+    finally:
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -407,6 +503,8 @@ TESTS = {
     "hard": test_hard_use,
     "escape": test_json_escaping,
     "many": test_many_messages,
+    "channel": test_mesh_channel,
+    "recenter": test_recenter,
 }
 
 def main():

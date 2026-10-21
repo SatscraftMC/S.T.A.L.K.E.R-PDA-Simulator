@@ -63,7 +63,7 @@ typedef struct {
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
 
-#define PDA_VERSION   "v0.0.4-pre-alpha"
+#define PDA_VERSION   "v0.0.5-pre-alpha"
 
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
@@ -123,6 +123,7 @@ typedef struct {
     int focus_sub;
     bool sub_on[SUB_COUNT];
     uint32_t canvas_buf[HEADER_W * HEADER_H];
+    uint32_t icon_buf[28 * 28];    /* the recenter button's target */
 } shell_t;
 
 static shell_t g_sh;
@@ -171,6 +172,27 @@ static void stroke_circle(int cx, int cy, int r, uint32_t c)
             int ro = (r + 1) * (r + 1), ri = (r - 1) * (r - 1);
             if(d2 <= ro && d2 >= ri) px(i, j, c);
         }
+}
+
+/* the little target on the recenter button: a ring with four ticks */
+static void draw_recenter_icon(uint32_t * buf, int w, int h)
+{
+    memset(buf, 0, sizeof(uint32_t) * (size_t)w * (size_t)h);
+    int cx = w / 2, cy = h / 2;
+    uint32_t col = argb_hex(PDA_MAP_ME);
+    for(int a = 0; a < 360; a += 2) {
+        double r = a * M_PI / 180.0;
+        int x = cx + (int)(7.0 * cos(r) + 0.5);
+        int y = cy + (int)(7.0 * sin(r) + 0.5);
+        if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = col;
+    }
+    for(int d = -12; d <= 12; d++) {
+        if(d > -5 && d < 5) continue;
+        int x = cx + d, y = cy;
+        if(x >= 0 && x < w) buf[y * w + x] = col;
+        x = cx; y = cy + d;
+        if(y >= 0 && y < h) buf[y * w + x] = col;
+    }
 }
 
 static void draw_parallelogram(int ox, int oy, int w, int h, int slant,
@@ -1041,6 +1063,16 @@ static void on_zout(lv_event_t * e)
     map_zoom(&g_sh, -1, 400, 205);
 }
 
+/* put the view back on the blue dot */
+static void on_recenter(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    shell_t * sh = &g_sh;
+    sh->lon_c = sh->gps.lon;
+    sh->lat_c = sh->gps.lat;
+    map_update(sh);
+}
+
 static lv_point_t g_last_pt;
 
 /* the mouse wheel is handled in main.c (SDL level) because LVGL 9 routes the
@@ -1150,8 +1182,21 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_center(zout_lbl);
     lv_obj_add_event_cb(zout, on_zout, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t * zbtns[2] = { zin, zout };
-    for(int i = 0; i < 2; i++) {
+    lv_obj_t * zbtns[3] = { zin, zout, NULL };
+
+    /* the recenter button: put the view back on the blue dot */
+    draw_recenter_icon(sh->icon_buf, 28, 28);
+    lv_obj_t * rc = lv_button_create(overlay);
+    lv_obj_set_pos(rc, 756, 298);
+    lv_obj_set_size(rc, 28, 28);
+    lv_obj_set_style_pad_all(rc, 0, LV_PART_MAIN);   /* the icon fills it */
+    lv_obj_t * ico = lv_canvas_create(rc);
+    lv_canvas_set_buffer(ico, sh->icon_buf, 28, 28, LV_COLOR_FORMAT_ARGB8888);
+    lv_obj_set_pos(ico, 0, 0);
+    lv_obj_set_size(ico, 28, 28);
+    lv_obj_add_event_cb(rc, on_recenter, LV_EVENT_CLICKED, NULL);
+    zbtns[2] = rc;
+    for(int i = 0; i < 3; i++) {
         lv_obj_set_style_bg_color(zbtns[i], lv_color_hex(PDA_ZOOM_BG), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(zbtns[i], LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_border_width(zbtns[i], 1, LV_PART_MAIN);
