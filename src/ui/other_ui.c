@@ -250,9 +250,6 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
     /* a little more room on the left: the letters have a bearing of their
        own and the first one was cut in half by the edge of the field */
     lv_obj_set_style_pad_left(ta, 4, LV_PART_MAIN);
-    /* the theme draws the cursor as a left border - that border lands on the
-       character under it */
-    lv_obj_set_style_border_width(ta, 0, LV_PART_CURSOR);
     lv_cursor_only_when_focused(ta);
     return ta;
 }
