@@ -262,7 +262,7 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
        The box's border is 1px, so this puts the text of the field exactly
        where a plain value starts - one VAL_PAD inside the column. */
     lv_obj_set_style_pad_left(ta, VAL_PAD - 1, LV_PART_MAIN);
-    lv_cursor_only_when_focused(ta);
+    lv_caret_init(ta);
     return ta;
 }
 

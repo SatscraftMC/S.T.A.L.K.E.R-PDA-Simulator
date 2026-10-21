@@ -452,7 +452,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);
     lv_obj_set_style_pad_left(ta, 6, LV_PART_MAIN);
     /* the cursor only shows while the field has the focus */
-    lv_cursor_only_when_focused(ta);
+    lv_caret_init(ta);
     g_ui.input = ta;
     lv_obj_add_event_cb(ta, on_input_ready, LV_EVENT_READY, NULL);
     if(group) lv_group_add_obj(group, ta);

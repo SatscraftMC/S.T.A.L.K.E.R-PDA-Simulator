@@ -498,6 +498,55 @@ xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.4)
         stop(p, f)
 
 
+def test_caret():
+    print("11. the text caret", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "caret")
+    try:
+        time.sleep(3.0)
+
+        def count(path, x0, x1, y0, y1, accent):
+            """the pixels of that colour in a box of the app
+               (the screenshots have the window's title bar on top)"""
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            n = 0
+            for y in range(y0 + 32, y1 + 32):
+                for x in range(x0, x1):
+                    r, g, b = px[x, y]
+                    if accent:
+                        if r > 150 and g > 110 and b < 80 and r >= g:
+                            n += 1
+                    else:
+                        # the dim grey of the placeholder
+                        if 60 < r < 160 and 60 < g < 160 and b < 120:
+                            n += 1
+            return n
+
+        # the name field of the User page: the caret stands at its left edge
+        click(NAME_X, NAME_Y)
+        time.sleep(0.5)
+        on = max(count(shot("caret_on"), 466, 500, 110, 128, True)
+                 for _ in range(6))
+        note(on > 0, f"the caret shows while the field has the focus ({on} pixels)")
+        hidden = max(count(shot("caret_ph"), 466, 560, 112, 126, False)
+                     for _ in range(3))
+        note(hidden == 0, f"the placeholder steps aside while the field is edited "
+                         f"({hidden} pixels)")
+
+        # the room field takes the focus away: the caret goes with it
+        click(NAME_X, NAME_Y + 20)
+        time.sleep(0.5)
+        off = max(count(shot("caret_off"), 466, 500, 110, 128, True)
+                  for _ in range(6))
+        note(off == 0, f"the caret is gone when the field loses the focus ({off} pixels)")
+        back = max(count(shot("caret_back"), 466, 560, 112, 126, False)
+                   for _ in range(3))
+        note(back > 0, f"the placeholder comes back ({back} pixels)")
+    finally:
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -509,6 +558,7 @@ TESTS = {
     "many": test_many_messages,
     "channel": test_mesh_channel,
     "recenter": test_recenter,
+    "caret": test_caret,
 }
 
 def main():
