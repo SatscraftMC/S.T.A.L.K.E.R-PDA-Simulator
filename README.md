@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.0.5-pre-alpha**
+**v0.1.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -37,6 +37,9 @@ on a desktop environment.
   tries, red when it is not there) and shows the settings of each system;
   *User* is where the name other devices see and the message preferences live.
 - **A recenter button** on the map puts the view back on the blue dot.
+- **The STALKER guide look**: a gritty surface, panels with a double frame
+  and crop marks in the corners, hairline separators between the rows and
+  coloured section headings - the same encyclopedia screen the game uses.
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;

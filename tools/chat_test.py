@@ -143,8 +143,8 @@ def test_net(port):
 
         time.sleep(1.0)
         after = shot("after")
-        b = light_pixels(before, 120, 460)
-        a = light_pixels(after, 120, 460)
+        b = light_pixels(before, 80, 460)
+        a = light_pixels(after, 80, 460)
         if b is not None and a is not None:
             note(a > b + 20, f"the message is on the screen ({b} -> {a} lit pixels)")
         else:

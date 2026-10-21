@@ -31,11 +31,15 @@ SHOTS = "/tmp/opencode/uishot"
 PREFS = os.path.expanduser("~/.config/pda/prefs.conf")
 OX, OY = 560, 300           # the window's client origin on this desktop
 DY = 45                     # the panel starts under the tab row and the gap
-NAME_Y = 74                 # the name field on the User page
+NAV_X = 40                  # the sections column
+NAV_Y0 = 83                 # the first section
+NAV_PITCH = 26
+NAME_Y = 115                # the name field on the User page
 NAME_X = 550                # the name field, in screen coordinates
 SAVE_X = 725                # the SAVE button next to it
 SUB_X = 244                 # the sub tab column
-SUB_Y0 = 64                 # the first sub tab
+SUB_Y0 = 83                 # the first sub tab
+SUB_PITCH = 24
 
 FAIL = []
 
@@ -206,8 +210,8 @@ def test_name_save():
     p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "name")
     time.sleep(2.8)
     try:
-        # the name field (the content starts at app x=190, the value column
-        # 158 into it) and the SAVE button to its right
+        # the name field (the content starts at app x=306, the value column
+        # 150 into it) and the SAVE button to its right
         click(NAME_X, NAME_Y)
         time.sleep(0.3)
         type_text("Satscraft")
@@ -231,7 +235,7 @@ def test_name_save():
     try:
         path = shot("name_restart")
         # the name is drawn in the field: look for the pixels of the text
-        n = lit_pixels(path, DY + 10, DY + 40)
+        n = lit_pixels(path, DY + 63, DY + 83)
         note(n > 10, f"the name is there after a restart ({n} lit pixels in the field)")
     finally:
         stop(p, f)
@@ -298,21 +302,21 @@ def test_hard_use():
         click(120 + 6 * 80, 22)
         time.sleep(0.4)
         for sub in range(6):
-            click(SUB_X, SUB_Y0 + 26 * sub)
+            click(SUB_X, SUB_Y0 + SUB_PITCH * sub)
         time.sleep(0.5)
         # and the nav column
-        for y in (20, 50, 80, 110):
-            click(40, DY + y)
+        for i in range(4):
+            click(NAV_X, NAV_Y0 + NAV_PITCH * i)
         time.sleep(0.5)
         # save a name and walk away from the page while it flashes
-        click(40, DY + 80)          # the User page
+        click(NAV_X, NAV_Y0 + NAV_PITCH * 2)     # the User page
         time.sleep(0.3)
         click(NAME_X, NAME_Y)       # the name field
         type_text("Satscraft")
         click(SAVE_X, NAME_Y)       # SAVE
-        click(40, DY + 50)          # and straight to another page
+        click(NAV_X, NAV_Y0 + NAV_PITCH * 1)     # and straight to another page
         time.sleep(1.8)             # long enough for the flash to fire
-        click(40, DY + 80)          # and back again
+        click(NAV_X, NAV_Y0 + NAV_PITCH * 2)     # and back again
         time.sleep(0.4)
         ok = app_alive(p, logpath)
         shot("hard")

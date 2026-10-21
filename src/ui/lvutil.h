@@ -41,9 +41,8 @@ static inline void lv_no_transition(lv_obj_t * obj)
     lv_obj_set_style_transition(obj, &tr, LV_PART_MAIN);
     lv_obj_set_style_transition(obj, &tr, LV_STATE_PRESSED);
 }
-
-/* a carrier's colour: green when it is up, grey while it tries, red when it
-   is not there */
+/* a carrier's colour: green when it is up, grey while it tries, red when
+   it is not there */
 static inline uint32_t lv_carrier_color(chat_carrier_state_t st)
 {
     if(st == CHAT_CARRIER_ONLINE) return PDA_CARRIER_UP;
@@ -51,4 +50,32 @@ static inline uint32_t lv_carrier_color(chat_carrier_state_t st)
     return PDA_CARRIER_DOWN;
 }
 
+/* LVGL draws the text cursor whether the field has the focus or not, and it
+   sits on top of the placeholder - so an empty field looks like its text is
+   chopped off. The cursor only shows while the field is the focused one. */
+
+static inline void lv_cursor_focus_cb(lv_event_t * e)
+{
+    lv_obj_t * ta = lv_event_get_current_target(e);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+}
+
+static inline void lv_cursor_defocus_cb(lv_event_t * e)
+{
+    lv_obj_t * ta = lv_event_get_current_target(e);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_CURSOR);
+}
+
+static inline void lv_cursor_only_when_focused(lv_obj_t * ta)
+{
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_CURSOR);
+    lv_obj_add_event_cb(ta, lv_cursor_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(ta, lv_cursor_defocus_cb, LV_EVENT_DEFOCUSED, NULL);
+}
+
 #endif
+

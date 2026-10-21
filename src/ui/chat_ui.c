@@ -1,5 +1,6 @@
 #include "ui/chat_ui.h"
 #include "ui/palette.h"
+#include "ui/grit.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "ui/prefs.h"
@@ -17,26 +18,35 @@
  * carrier it came in on, and everything typed here goes out on every carrier
  * that is up.
  *
+ * The guide look: a gritty surface, a framed panel with the log in it and
+ * the compose row at the bottom of it.
+ *
  *   +-------------------------------------------------------------+
  *   | SECTOR   mesh 2425 / relay 1.2.3.4:7788     BIT  FIPS  NET  |
  *   +-------------------------------------------------------------+
  *   | 12:04  ROOK     anyone got the drop coords?                 |
  *   | 12:05  ME       not yet, rain again                        |
- *   +-------------------------------------------------------------+
+ *   |-------------------------------------------------------------|
  *   | [ type a message...                                ] [ SEND ] |
  *   +-------------------------------------------------------------+
  */
 
 #define LIST_W        800
 #define STRIP_H       26
-#define COMPOSE_H     38
+#define COMPOSE_H     40
 #define ROW_MAX       120
 #define TEXT_X        152
-#define TEXT_W        640
+#define TEXT_W        596
 #define NAME_X        44
 #define NAME_W        62
 #define TAG_X         108
 #define TAG_W         42
+#define FRAME_X       6
+#define FRAME_Y       32
+#define FRAME_W       788
+#define FRAME_H       396
+#define BACK_W        800
+#define BACK_H        452
 
 typedef struct {
     lv_obj_t * root;
@@ -118,7 +128,7 @@ static void add_row(const chat_msg_t * m)
 
     lv_obj_t * row = lv_obj_create(g_ui.list);
     lv_obj_set_pos(row, 0, g_ui.y);
-    lv_obj_set_size(row, LIST_W, 20);
+    lv_obj_set_size(row, lv_pct(100), 20);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
@@ -195,6 +205,9 @@ static void add_row(const chat_msg_t * m)
     g_ui.row_h[g_ui.rows] = th + 6;
     g_ui.rows++;
     g_ui.y += th + 6;
+
+    /* the hairline between the messages */
+    grit_rule(row, 0, th + 5, lv_pct(100), false, PDA_RULE);
 }
 
 static void refresh(void)
@@ -289,30 +302,31 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_row(root, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_column(root, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(root, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(root, LV_DIR_NONE);
     lv_obj_set_scrollable(root, false);
     g_ui.root = root;
 
+    /* --- the gritty surface everything sits on --- */
+    grit_backdrop(root, BACK_W, BACK_H);
+
     /* --- the carrier strip --- */
     lv_obj_t * strip = lv_obj_create(root);
-    lv_obj_set_size(strip, lv_pct(100), STRIP_H);
-    lv_obj_set_flex_grow(strip, 0);
-    lv_obj_set_style_bg_color(strip, lv_color_hex(PDA_CHAT_STRIP), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_pos(strip, 0, 0);
+    lv_obj_set_size(strip, LIST_W, STRIP_H);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_side(strip, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
-    lv_obj_set_style_border_color(strip, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_border_width(strip, 1, LV_PART_MAIN);
     lv_obj_set_style_pad_all(strip, 0, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(strip, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(strip, LV_DIR_NONE);
     lv_obj_set_scrollable(strip, false);
 
+    /* the little square indicator of the guide screens */
+    grit_square(strip, 8, 9, 8, PDA_MSG_ACCENT);
+
     g_ui.room_lbl = lv_label_create(strip);
     lv_label_set_text(g_ui.room_lbl, chat_room());
-    lv_obj_set_pos(g_ui.room_lbl, 8, 5);
+    lv_obj_set_pos(g_ui.room_lbl, 24, 5);
     lv_obj_set_style_text_font(g_ui.room_lbl, &pda_font_mono_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(g_ui.room_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
 
@@ -326,7 +340,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* the carrier badges, right aligned */
     int n = chat_transport_count();
-    int bx = LIST_W - 10;
+    int bx = 786;
     for(int i = n - 1; i >= 0; i--) {
         const chat_transport_t * tr = chat_transport_get(i);
         if(!tr) continue;
@@ -341,10 +355,21 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
         g_ui.badge[i] = b;
     }
 
+    /* the rule under the strip */
+    grit_rule(root, 6, STRIP_H + 2, 788, false, PDA_RULE);
+
+    /* --- the frame: the log and the compose row live in it --- */
+    lv_obj_t * frame = grit_frame(root, FRAME_X, FRAME_Y, FRAME_W, FRAME_H, PDA_FRAME);
+    if(frame) {
+        lv_obj_set_style_bg_color(frame, lv_color_hex(PDA_PAGE_BG), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(frame, LV_OPA_90, LV_PART_MAIN);
+    }
+    lv_obj_t * panel = frame ? frame : root;
+
     /* --- the log --- */
-    lv_obj_t * list = lv_obj_create(root);
-    lv_obj_set_size(list, lv_pct(100), 0);
-    lv_obj_set_flex_grow(list, 1);
+    lv_obj_t * list = lv_obj_create(panel);
+    lv_obj_set_pos(list, 8, 8);
+    lv_obj_set_size(list, FRAME_W - 16, FRAME_H - 16 - COMPOSE_H);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(list, 0, LV_PART_MAIN);
@@ -353,49 +378,47 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollable(list, true);
-    lv_obj_set_style_bg_color(list, lv_color_hex(PDA_CHAT_EDGE), LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(list, LV_OPA_50, LV_PART_SCROLLBAR);
-    lv_obj_set_style_width(list, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(list, lv_color_hex(PDA_SCROLL), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(list, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(list, 0, LV_PART_SCROLLBAR);
     g_ui.list = list;
 
     /* --- the compose row --- */
-    lv_obj_t * compose = lv_obj_create(root);
-    lv_obj_set_size(compose, lv_pct(100), COMPOSE_H);
-    lv_obj_set_flex_grow(compose, 0);
-    lv_obj_set_style_bg_color(compose, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(compose, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_t * compose = lv_obj_create(panel);
+    lv_obj_set_pos(compose, 8, FRAME_H - 8 - COMPOSE_H);
+    lv_obj_set_size(compose, FRAME_W - 16, COMPOSE_H);
+    lv_obj_set_style_bg_opa(compose, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(compose, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_side(compose, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
-    lv_obj_set_style_border_color(compose, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_border_width(compose, 1, LV_PART_MAIN);
     lv_obj_set_style_pad_all(compose, 0, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(compose, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(compose, LV_DIR_NONE);
     lv_obj_set_scrollable(compose, false);
 
+    /* the rule between the log and the compose row */
+    grit_rule(compose, 0, 0, lv_pct(100), false, PDA_RULE);
+
     lv_obj_t * ta = lv_textarea_create(compose);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_placeholder_text(ta, "type a message");
-    lv_obj_set_pos(ta, 8, 6);
-    lv_obj_set_size(ta, 660, 26);
+    lv_obj_set_pos(ta, 4, 6);
+    lv_obj_set_size(ta, 620, 26);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_text_font(ta, &pda_font_mono_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
     lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
-    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
     lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);
+    /* the cursor only shows while the field has the focus */
+    lv_cursor_only_when_focused(ta);
     g_ui.input = ta;
     lv_obj_add_event_cb(ta, on_input_ready, LV_EVENT_READY, NULL);
     if(group) lv_group_add_obj(group, ta);
 
     lv_obj_t * send = lv_button_create(compose);
-    lv_obj_set_pos(send, 678, 5);
+    lv_obj_set_pos(send, 636, 5);
     lv_obj_set_size(send, 112, 28);
     lv_obj_set_style_bg_color(send, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(send, LV_OPA_COVER, LV_PART_MAIN);
@@ -409,6 +432,9 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_text_color(slbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     lv_obj_center(slbl);
     lv_obj_add_event_cb(send, on_send_click, LV_EVENT_CLICKED, NULL);
+
+    /* the crop marks go on last, so they are on top of the panel */
+    if(frame) grit_corners(frame, FRAME_W, FRAME_H, PDA_FRAME);
 
     refresh();
     lv_timer_create(chat_tick, 200, NULL);

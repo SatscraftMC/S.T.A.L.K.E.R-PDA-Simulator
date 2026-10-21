@@ -2,6 +2,7 @@
 #include "ui/palette.h"
 #include "ui/prefs.h"
 #include "ui/lvutil.h"
+#include "ui/grit.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "gps.h"
@@ -20,24 +21,45 @@
 
 /* The Other tab.
  *
- *   +--------------+ +------------------------------------------+
- *   | Settings     | | General | Advanced | Language | Themes |
- *   | Connections  | +------------------------------------------+
- *   | User         | |                                          |
- *   | Extras       | |                                          |
- *   +--------------+ +------------------------------------------+
+ * The STALKER "guide" look: a gritty surface, a framed panel, two columns
+ * of entries on the left and the page on the right.
+ *
+ *   +--------------------------------------------------+
+ *   |                  Connections                     |  <- the strip
+ *   +--------------------------------------------------+
+ *   | Settings    |  Info      |  NETWORKING            |
+ *   | Connections |  Bitchat   |  BIT ......... ONLINE   |
+ *   | User        |  F.I.P.S   |  NET ......... OFFLINE |
+ *   | Extras      |  WiFi      |                        |
+ *   +--------------------------------------------------+
  *
  * Settings and Extras are placeholders for now; Connections and User work.
  */
 
 #define PAGE_COUNT   4
-#define NAV_W        180          /* the sections column */
-#define SUB_W        112          /* the sub tabs column, vertical */
-#define SUB_H        22
-#define SUB_X0       (NAV_W + 8)
-#define PAGE_X       (SUB_X0 + SUB_W + 12)
+#define NAV_W        160          /* the sections column */
+#define NAV_H        22
+#define NAV_PITCH    26
+#define SUB_W        100          /* the sub tabs column, vertical */
+#define SUB_H        20
+#define SUB_PITCH    24
+#define STRIP_H      26           /* the title strip under the tab bar */
+#define FRAME_X      6
+#define FRAME_Y      32
+#define FRAME_W      788
+#define FRAME_H      396
+#define COL_X        14           /* the first column, inside the frame */
+#define RULE1_X      182
+#define SUB_X        190
+#define RULE2_X      298
+#define PAGE_X       306
+#define PAGE_Y       38
+#define PAGE_W       480
+#define PAGE_H       384
 #define ROW_H        18
-#define VAL_X        158
+#define VAL_X        150
+#define BACK_W       800
+#define BACK_H       452
 
 enum { PAGE_SETTINGS = 0, PAGE_CONNECTIONS = 1, PAGE_USER = 2, PAGE_EXTRAS = 3 };
 
@@ -72,8 +94,10 @@ typedef struct {
     lv_obj_t * sub_lbl[8];
     int n_subs;
     lv_obj_t * content;
+    lv_obj_t * strip_title;
     int page;
     int sub;
+    int sec_no;            /* the headings alternate their colour */
 
     /* the live labels of the page that is on screen */
     lv_obj_t * live[16];
@@ -136,11 +160,24 @@ static lv_obj_t * label(lv_obj_t * parent, int x, int y, int w, const char * tex
     return l;
 }
 
-/* a section heading */
+/* a section heading: a small square, the title and a hairline under it */
 static void section(lv_obj_t * parent, const char * title)
 {
-    lv_obj_t * l = label(parent, 0, 0, 0, title, &pda_font_mono_10, PDA_MSG_ACCENT);
-    lv_obj_set_height(l, 14);
+    uint32_t col = (g_ui.sec_no++ % 2) ? PDA_HEAD_B : PDA_HEAD_A;
+
+    lv_obj_t * s = plain(parent, lv_pct(100), 16);
+    lv_obj_set_flex_grow(s, 0);
+
+    lv_obj_t * sq = plain(s, 6, 6);
+    lv_obj_set_pos(sq, 0, 5);
+    lv_obj_set_style_bg_color(sq, lv_color_hex(col), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(sq, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t * l = label(s, 12, 0, 0, title, &pda_font_mono_10, col);
+    lv_obj_set_height(l, 12);
+
+    /* the hairline under the heading */
+    grit_rule(s, 0, 15, lv_pct(100), false, PDA_RULE);
 }
 
 /* one "setting" row: a name on the left, the value on the right */
@@ -148,13 +185,15 @@ static lv_obj_t * row(lv_obj_t * parent, const char * name)
 {
     lv_obj_t * r = plain(parent, lv_pct(100), ROW_H);
     lv_obj_set_flex_grow(r, 0);
-    label(r, 0, 3, 150, name, &pda_font_mono_10, PDA_MSG_TIME);
+    label(r, 0, 3, 150, name, &pda_font_mono_10, PDA_MSG_SYS);
+    /* the hairline between the rows */
+    grit_rule(r, 0, ROW_H - 1, lv_pct(100), false, PDA_RULE);
     return r;
 }
 
 static lv_obj_t * value(lv_obj_t * r, const char * text, uint32_t color)
 {
-    lv_obj_t * v = label(r, VAL_X, 1, 380, text, &pda_font_mono_10, color);
+    lv_obj_t * v = label(r, VAL_X, 1, 290, text, &pda_font_mono_10, color);
     return v;
 }
 
@@ -170,6 +209,27 @@ static lv_obj_t * live_row(lv_obj_t * parent, const char * name, const char * ke
         g_ui.n_live++;
     }
     return r;
+}
+
+/* a text field in a row: the cursor only shows while the field has the
+   focus, so an empty field shows its placeholder whole */
+static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
+{
+    lv_obj_t * ta = lv_textarea_create(row_obj);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_placeholder_text(ta, placeholder);
+    lv_obj_set_pos(ta, VAL_X, 0);
+    lv_obj_set_size(ta, 220, 17);
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
+    lv_cursor_only_when_focused(ta);
+    return ta;
 }
 
 /* a small square toggle */
@@ -295,23 +355,7 @@ static void page_bitchat(void)
     section(g_ui.content, "BITCHAT - LOCAL MESH");
 
     lv_obj_t * r = row(g_ui.content, "Channel");
-    lv_obj_t * ta = lv_textarea_create(r);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_placeholder_text(ta, chat_mesh_channel());
-    lv_obj_set_pos(ta, VAL_X, 0);
-    lv_obj_set_size(ta, 220, 17);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
-    /* the cursor: a bright line where the next character goes */
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
+    lv_obj_t * ta = text_field(r, chat_mesh_channel());
     lv_obj_add_event_cb(ta, other_ui_on_channel, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
     g_ui.chan_ta = ta;
@@ -489,23 +533,7 @@ static void page_user(void)
     section(g_ui.content, "IDENTITY");
 
     lv_obj_t * r = row(g_ui.content, "Name");
-    lv_obj_t * ta = lv_textarea_create(r);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_placeholder_text(ta, chat_identity());
-    lv_obj_set_pos(ta, VAL_X, 0);
-    lv_obj_set_size(ta, 220, 17);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_text_font(ta, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
-    /* the cursor: a bright line where the next character goes */
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_pad_all(ta, 2, LV_PART_MAIN);
+    lv_obj_t * ta = text_field(r, chat_identity());
     lv_obj_add_event_cb(ta, other_ui_on_name, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta);
     g_ui.name_ta = ta;
@@ -513,22 +541,7 @@ static void page_user(void)
     g_ui.name_btn_lbl = lv_obj_get_child(g_ui.name_btn, 0);
 
     lv_obj_t * r2 = row(g_ui.content, "Room");
-    lv_obj_t * ta2 = lv_textarea_create(r2);
-    lv_textarea_set_one_line(ta2, true);
-    lv_textarea_set_placeholder_text(ta2, chat_room());
-    lv_obj_set_pos(ta2, VAL_X, 0);
-    lv_obj_set_size(ta2, 220, 17);
-    lv_obj_set_style_bg_color(ta2, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ta2, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(ta2, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(ta2, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_text_font(ta2, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
-    lv_obj_set_style_bg_color(ta2, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(ta2, LV_OPA_COVER, LV_PART_CURSOR);
-    lv_obj_set_style_text_color(ta2, lv_color_hex(PDA_MSG_ACCENT), LV_PART_CURSOR);
-    lv_obj_set_style_pad_all(ta2, 2, LV_PART_MAIN);
+    lv_obj_t * ta2 = text_field(r2, chat_room());
     lv_obj_add_event_cb(ta2, other_ui_on_room, LV_EVENT_READY, NULL);
     if(g_ui.group) lv_group_add_obj(g_ui.group, ta2);
     g_ui.room_ta = ta2;
@@ -565,6 +578,7 @@ static void build_content(void)
     lv_obj_clean(g_ui.content);
     g_ui.n_live = 0;
     g_ui.n_tog = 0;
+    g_ui.sec_no = 0;
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
@@ -704,24 +718,24 @@ static void restyle_nav(void)
 {
     for(int i = 0; i < PAGE_COUNT; i++) {
         bool on = (i == g_ui.page);
-        uint32_t bg = on ? PDA_SUB_FILL : PDA_CHAT_BG;
+        uint32_t bg = on ? PDA_SEL_BAR : PDA_BG;
         lv_state_t st;
         for(int k = 0; k < 2; k++) {
             st = k ? LV_STATE_FOCUSED : LV_PART_MAIN;
             lv_obj_set_style_bg_color(g_ui.nav_box[i], lv_color_hex(bg), st);
-            lv_obj_set_style_bg_opa(g_ui.nav_box[i], LV_OPA_COVER, st);
+            lv_obj_set_style_bg_opa(g_ui.nav_box[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, st);
             lv_obj_set_style_border_side(g_ui.nav_box[i],
                                           on ? LV_BORDER_SIDE_LEFT : LV_BORDER_SIDE_NONE,
                                           st);
             lv_obj_set_style_border_color(g_ui.nav_box[i], lv_color_hex(PDA_MSG_ACCENT),
                                           st);
-            lv_obj_set_style_border_width(g_ui.nav_box[i], on ? 3 : 0, st);
+            lv_obj_set_style_border_width(g_ui.nav_box[i], on ? 2 : 0, st);
             lv_obj_set_style_outline_width(g_ui.nav_box[i], 0, st);
             lv_obj_set_style_shadow_width(g_ui.nav_box[i], 0, st);
             lv_obj_set_style_bg_color(g_ui.nav_box[i], lv_color_hex(bg), LV_STATE_PRESSED);
         }
         lv_obj_set_style_text_color(g_ui.nav_lbl[i],
-                                    lv_color_hex(on ? PDA_MSG_TEXT : PDA_TAB_TEXT),
+                                    lv_color_hex(on ? PDA_SEL_TEXT : PDA_TAB_TEXT),
                                     LV_PART_MAIN);
     }
 }
@@ -730,23 +744,23 @@ static void restyle_subs(void)
 {
     for(int i = 0; i < g_ui.n_subs; i++) {
         bool on = (i == g_ui.sub);
-        uint32_t bg = on ? PDA_SUB_FILL : PDA_CHAT_BG;
+        uint32_t bg = on ? PDA_SEL_BAR : PDA_BG;
         lv_state_t st;
         for(int k = 0; k < 2; k++) {
             st = k ? LV_STATE_FOCUSED : LV_PART_MAIN;
             lv_obj_set_style_bg_color(g_ui.sub_btn[i], lv_color_hex(bg), st);
-            lv_obj_set_style_bg_opa(g_ui.sub_btn[i], LV_OPA_COVER, st);
+            lv_obj_set_style_bg_opa(g_ui.sub_btn[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, st);
             lv_obj_set_style_border_side(g_ui.sub_btn[i], LV_BORDER_SIDE_LEFT, st);
             lv_obj_set_style_border_color(g_ui.sub_btn[i],
                                           lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_EDGE),
                                           st);
-            lv_obj_set_style_border_width(g_ui.sub_btn[i], on ? 3 : 0, st);
+            lv_obj_set_style_border_width(g_ui.sub_btn[i], on ? 2 : 0, st);
             lv_obj_set_style_outline_width(g_ui.sub_btn[i], 0, st);
             lv_obj_set_style_shadow_width(g_ui.sub_btn[i], 0, st);
             lv_obj_set_style_bg_color(g_ui.sub_btn[i], lv_color_hex(bg), LV_STATE_PRESSED);
         }
         lv_obj_set_style_text_color(g_ui.sub_lbl[i],
-                                    lv_color_hex(on ? PDA_MSG_TEXT : PDA_TAB_TEXT),
+                                    lv_color_hex(on ? PDA_SEL_TEXT : PDA_TAB_TEXT),
                                     LV_PART_MAIN);
     }
 }
@@ -765,6 +779,7 @@ static void select_page(int page)
         lv_obj_set_hidden(g_ui.sub_btn[i], !show);
         if(show) lv_label_set_text(g_ui.sub_lbl[i], g_sub_names[page][i]);
     }
+    if(g_ui.strip_title) lv_label_set_text(g_ui.strip_title, g_page_names[page]);
     restyle_nav();
     restyle_subs();
     build_content();
@@ -902,11 +917,29 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollable(root, false);
     g_ui.root = root;
 
+    /* --- the gritty surface everything sits on --- */
+    grit_backdrop(root, BACK_W, BACK_H);
+
+    /* --- the strip under the tab bar: a title and the two indicators --- */
+    grit_square(root, 22, 9, 8, PDA_MSG_ACCENT);
+    grit_square(root, 770, 9, 8, PDA_MSG_ACCENT);
+
+    g_ui.strip_title = label(root, 0, 0, 300, g_page_names[0], &pda_font_mono_10,
+                             PDA_MSG_TEXT);
+    lv_obj_set_style_text_align(g_ui.strip_title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(g_ui.strip_title, LV_ALIGN_TOP_MID, 0, 8);
+
+    grit_rule(root, 6, STRIP_H + 2, 788, false, PDA_RULE);
+
+    /* --- the frame around the panel --- */
+    lv_obj_t * frame = grit_frame(root, FRAME_X, FRAME_Y, FRAME_W, FRAME_H, PDA_FRAME);
+    if(frame) grit_corners(frame, FRAME_W, FRAME_H, PDA_FRAME);
+
     /* --- the left column --- */
     for(int i = 0; i < PAGE_COUNT; i++) {
         lv_obj_t * box = lv_button_create(root);
-        lv_obj_set_size(box, NAV_W - 12, 26);
-        lv_obj_set_pos(box, 6, 8 + i * 30);
+        lv_obj_set_size(box, NAV_W, NAV_H);
+        lv_obj_set_pos(box, COL_X, PAGE_Y + i * NAV_PITCH);
         lv_obj_set_style_pad_all(box, 0, LV_PART_MAIN);
         lv_obj_set_style_radius(box, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(box, 0, LV_PART_MAIN);
@@ -916,7 +949,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 
         lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
                              PDA_TAB_TEXT);
-        lv_obj_set_width(l, NAV_W - 12 - 16);
+        lv_obj_set_width(l, NAV_W - 16);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
         lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);   /* centred in the height */
         g_ui.nav_lbl[i] = l;
@@ -930,7 +963,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     for(int i = 0; i < 8; i++) {
         lv_obj_t * b = lv_button_create(root);
         lv_obj_set_size(b, SUB_W, SUB_H);
-        lv_obj_set_pos(b, SUB_X0, 8 + i * (SUB_H + 4));
+        lv_obj_set_pos(b, SUB_X, PAGE_Y + i * SUB_PITCH);
         lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
         lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
@@ -949,16 +982,27 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         if(group) lv_group_add_obj(group, b);
     }
 
+    /* --- the rules between the columns --- */
+    grit_rule(root, RULE1_X, PAGE_Y, PAGE_H, true, PDA_FRAME_INNER);
+    grit_rule(root, RULE2_X, PAGE_Y, PAGE_H, true, PDA_FRAME_INNER);
+
     /* --- the page --- */
     lv_obj_t * content = lv_obj_create(root);
-    lv_obj_set_pos(content, PAGE_X, 4);
-    lv_obj_set_size(content, 800 - PAGE_X, 400);
-    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(content, 0, LV_PART_MAIN);
+    lv_obj_set_pos(content, PAGE_X, PAGE_Y);
+    lv_obj_set_size(content, PAGE_W, PAGE_H);
+    lv_obj_set_style_bg_color(content, lv_color_hex(PDA_PAGE_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(content, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_set_style_border_width(content, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(content, lv_color_hex(PDA_PAGE_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(content, 8, LV_PART_MAIN);
     lv_obj_set_style_pad_row(content, 2, LV_PART_MAIN);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(content, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(content, lv_color_hex(PDA_SCROLL), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(content, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(content, 0, LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_all(content, 0, LV_PART_SCROLLBAR);
     lv_obj_set_scroll_dir(content, LV_DIR_VER);
     lv_obj_set_scrollable(content, true);
     g_ui.content = content;

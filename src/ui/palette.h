@@ -54,4 +54,16 @@
 #define PDA_CARRIER_DOWN        0xB05545   /* red: it is not there */
 #define PDA_CARRIER_WAIT        0x8B8D85   /* grey: it is trying */
 
+/* the Other tab: the guide screen look */
+#define PDA_FRAME               0x3E4239   /* the line around the panel */
+#define PDA_FRAME_INNER         0x2A2D26   /* the second line inside it */
+#define PDA_RULE                0x242720   /* the hairlines between the rows */
+#define PDA_SEL_BAR             0x3B3E37   /* the bar of the selected entry */
+#define PDA_SEL_TEXT            0xC0C2B6
+#define PDA_HEAD_A              0x7FA24F   /* the headings, in turn */
+#define PDA_HEAD_B              0x5E8CB0
+#define PDA_PAGE_BG             0x0E0F0B   /* the page inside the panel */
+#define PDA_PAGE_EDGE           0x2A2D26
+#define PDA_SCROLL              0x4A4D45
+
 #endif
