@@ -233,7 +233,10 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
     if(tl) {
         lv_obj_set_width(tl, lv_pct(100));
         lv_obj_set_style_min_width(tl, 0, 0);
+        /* the text sits at the left of the field: the theme would centre it */
+        lv_obj_set_style_text_align(tl, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
     }
+    lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_LEFT, LV_PART_TEXTAREA_PLACEHOLDER);
     lv_textarea_set_placeholder_text(ta, placeholder);
     lv_obj_set_pos(ta, VAL_X, 0);
     lv_obj_set_size(ta, FIELD_W, FIELD_H);
@@ -834,6 +837,20 @@ static void build_content(void)
     else page_extras();
 
     other_ui_refresh();
+    if(getenv("PDA_DEBUG_FIELD")) {
+        uint32_t cnt = lv_obj_get_child_count(g_ui.content);
+        for(uint32_t i = 0; i < cnt; i++) {
+            lv_obj_t * rp = lv_obj_get_child(g_ui.content, i);
+            uint32_t rc = lv_obj_get_child_count(rp);
+            for(uint32_t j = 0; j < rc; j++) {
+                lv_obj_t * o = lv_obj_get_child(rp, j);
+                if(!lv_obj_check_type(o, &lv_textarea_class)) continue;
+                lv_obj_update_layout(o);
+                fprintf(stderr, "[field] built: x=%d w=%d content=%d\n",
+                        lv_obj_get_x(o), lv_obj_get_width(o), lv_obj_get_content_width(o));
+            }
+        }
+    }
 }
 
 /* ---------- the live values ---------- */

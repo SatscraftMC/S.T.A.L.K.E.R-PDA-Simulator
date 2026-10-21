@@ -45,7 +45,8 @@ int main(void)
     fprintf(stderr, "[pda] %s\n", PDA_VERSION);
 
     lv_display_t * disp = lv_sdl_window_create(800, 480);
-    lv_sdl_window_set_title(disp, "PDA // Simulator");
+    /* the version is in the window title: a stale process is then obvious */
+    lv_sdl_window_set_title(disp, "PDA // Simulator " PDA_VERSION);
 
     lv_sdl_mouse_create();
     lv_sdl_keyboard_create();
