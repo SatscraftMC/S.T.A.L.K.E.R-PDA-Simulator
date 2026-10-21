@@ -89,18 +89,11 @@ static void add_row(const chat_msg_t * m)
     }
 
     if(g_ui.rows >= ROW_MAX) {
-        /* drop the oldest row and pull everything up */
-        int drop = g_ui.row_h[0];
-        for(int i = 0; i < g_ui.rows - 1; i++) g_ui.row_h[i] = g_ui.row_h[i + 1];
-        g_ui.rows--;
-        g_ui.y -= drop;
+        /* drop the oldest row and pull the rest up */
         lv_obj_t * child = lv_obj_get_child(g_ui.list, 0);
         if(child) lv_obj_delete(child);
-        for(int i = 0; i < g_ui.rows; i++) {
-            lv_obj_t * c = lv_obj_get_child(g_ui.list, i);
-            if(c) lv_obj_set_pos(c, 0, g_ui.y - (g_ui.rows - i) * 0 - 0);
-        }
-        /* reposition: rows keep their order, just shifted up by the dropped height */
+        for(int i = 0; i < g_ui.rows - 1; i++) g_ui.row_h[i] = g_ui.row_h[i + 1];
+        g_ui.rows--;
         int yy = 0;
         for(int i = 0; i < g_ui.rows; i++) {
             lv_obj_t * c = lv_obj_get_child(g_ui.list, i);
