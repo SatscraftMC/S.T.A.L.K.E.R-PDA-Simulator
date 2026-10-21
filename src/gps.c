@@ -103,9 +103,11 @@ static void gpsd_connect(void)
     addr.sin_port = htons(GPSD_PORT);
     addr.sin_addr.s_addr = inet_addr(GPSD_HOST);
     if(connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[gps] connect failed\n");
         close(fd);
         return;
     }
+    if(getenv("PDA_DEBUG")) fprintf(stderr, "[gps] connected to gpsd\n");
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     s_sock = fd;
@@ -156,6 +158,7 @@ void gps_poll(gps_fix_t * fix)
 
     char buf[1024];
     ssize_t n = read(s_sock, buf, sizeof(buf) - 1);
+    if(getenv("PDA_DEBUG")) fprintf(stderr, "[gps] read -> %zd (sock %d)\n", n, s_sock);
     if(n <= 0) return;
     buf[n] = 0;
 

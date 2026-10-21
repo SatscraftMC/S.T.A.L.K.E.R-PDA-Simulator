@@ -1188,11 +1188,11 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     sh->sub_on[2] = true;
     sh->me_marker = -1;
     gps_init(&sh->gps);
+    sh->zoom_idx = 4;            /* 256 = 1 world texel per screen px */
+    /* the view starts on the GPS position (gps_init falls back to Funchal
+       when there is no fix yet) */
     sh->lon_c = sh->gps.lon;
     sh->lat_c = sh->gps.lat;
-    sh->zoom_idx = 4;            /* 256 = 1 world texel per screen px */
-    sh->lon_c = -16.96;          /* Funchal */
-    sh->lat_c = 32.66;
     sh->active_pack = -1;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(PDA_BG), LV_PART_MAIN);
