@@ -2,6 +2,7 @@
 #include "ui/palette.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
+#include "ui/prefs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +89,14 @@ static void add_row(const chat_msg_t * m)
         name_col = PDA_MSG_THEM;
     }
 
+    /* the columns move depending on what the user wants to see */
+    bool show_time = prefs_bool("show_time", true);
+    bool show_carrier = prefs_bool("show_carrier", true);
+    int time_x = 4;
+    int name_x = show_time ? 44 : 4;
+    int tag_x = show_time ? 108 : 68;
+    int text_x = show_time ? TEXT_X : TEXT_X - 44;
+
     if(g_ui.rows >= ROW_MAX) {
         /* drop the oldest row and pull the rest up */
         lv_obj_t * child = lv_obj_get_child(g_ui.list, 0);
@@ -115,17 +124,19 @@ static void add_row(const chat_msg_t * m)
     lv_obj_set_scrollable(row, false);
     lv_obj_set_clickable(row, false);
 
-    lv_obj_t * tl = lv_label_create(row);
-    lv_label_set_text(tl, tbuf);
-    lv_obj_set_pos(tl, 4, 1);
-    lv_obj_set_width(tl, 38);
-    lv_obj_set_style_text_font(tl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(tl, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
-    lv_obj_set_style_pad_all(tl, 0, LV_PART_MAIN);
+    if(show_time) {
+        lv_obj_t * tl = lv_label_create(row);
+        lv_label_set_text(tl, tbuf);
+        lv_obj_set_pos(tl, time_x, 1);
+        lv_obj_set_width(tl, 38);
+        lv_obj_set_style_text_font(tl, &pda_font_mono_10, LV_PART_MAIN);
+        lv_obj_set_style_text_color(tl, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
+        lv_obj_set_style_pad_all(tl, 0, LV_PART_MAIN);
+    }
 
     lv_obj_t * nl = lv_label_create(row);
     lv_label_set_text(nl, m->sender);
-    lv_obj_set_pos(nl, NAME_X, 1);
+    lv_obj_set_pos(nl, name_x, 1);
     lv_obj_set_width(nl, NAME_W);
     lv_label_set_long_mode(nl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(nl, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
@@ -134,12 +145,12 @@ static void add_row(const chat_msg_t * m)
     lv_obj_set_style_pad_all(nl, 0, LV_PART_MAIN);
 
     /* the carrier it came in on */
-    if(m->transport >= 0 && m->transport < chat_transport_count()) {
+    if(show_carrier && m->transport >= 0 && m->transport < chat_transport_count()) {
         const chat_transport_t * tr = chat_transport_get(m->transport);
         if(tr) {
             lv_obj_t * cl = lv_label_create(row);
             lv_label_set_text(cl, tr->tag);
-            lv_obj_set_pos(cl, TAG_X, 2);
+            lv_obj_set_pos(cl, tag_x, 2);
             lv_obj_set_width(cl, TAG_W);
             lv_obj_set_style_text_font(cl, &pda_font_mono_10, LV_PART_MAIN);
             lv_obj_set_style_text_color(cl, lv_color_hex(PDA_CARRIER_UP), LV_PART_MAIN);
@@ -150,8 +161,8 @@ static void add_row(const chat_msg_t * m)
     /* the label lays the text out itself: let it, and take its height */
     lv_obj_t * xl = lv_label_create(row);
     lv_label_set_text(xl, text);
-    lv_obj_set_pos(xl, TEXT_X, 0);
-    lv_obj_set_width(xl, TEXT_W);
+    lv_obj_set_pos(xl, text_x, 0);
+    lv_obj_set_width(xl, TEXT_W + (show_time ? 0 : 44));
     lv_label_set_long_mode(xl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_pad_all(xl, 0, LV_PART_MAIN);
     lv_obj_set_style_text_font(xl, &pda_font_mono_14, LV_PART_MAIN);
@@ -176,9 +187,12 @@ static void refresh(void)
         g_ui.y = 0;
         g_ui.rendered = 0;
     }
+    bool show_system = prefs_bool("show_system", true);
     for(int i = g_ui.rendered; i < count; i++) {
         const chat_msg_t * m = chat_get(i);
-        if(m) add_row(m);
+        if(!m) continue;
+        if(m->kind == CHAT_KIND_SYS && !show_system) continue;
+        add_row(m);
     }
     g_ui.rendered = count;
     if(stick && count > 0) scroll_to_bottom();

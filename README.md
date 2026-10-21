@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.0.2-pre-alpha**
+**v0.0.3-pre-alpha**
 
 An open-source handheld communicator UI in the spirit of the STALKER PDA: a
 gripped, button-driven device with an offline map, radio/messages, contacts and
@@ -37,6 +37,11 @@ desktop environment.
   every medium that is up - the local mesh, the FIPS mesh and the internet -
   and everything that comes in shows up in the same log, tagged with the
   carrier it arrived on.
+- **The Other tab** is the device's control panel: a column of sections
+  (Settings, Connections, User, Extras), sub-tabs across the top of the pane,
+  and the page below that. *Connections* shows what is connected and the
+  settings of each system; *User* is where the name other devices see and the
+  message preferences live.
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
@@ -90,18 +95,44 @@ EOF
 The mesh carrier needs no setup at all: start two PDAs on the same network
 and they hear each other.
 
+### The Other tab - settings, connections, user
+
+```
++--------------+ +------------------------------------------+
+| Settings     | | General | Advanced | Language | Themes    |
+| Connections  | +------------------------------------------+
+| User         | |                                          |
+| Extras       | |                                          |
++--------------+ +------------------------------------------+
+```
+
+**Connections → Info** is the one that matters: it says whether each system
+is up - the local mesh, the FIPS mesh, the internet, WiFi, GPS - and the
+other *Connections* pages show the settings of that system (the mesh port and
+the bridge, the fips sockets and the FSP port, the WiFi interface and its
+address, the live GPS data, the version and where the settings file lives).
+
+**User** holds the personalisation: the name other devices see on your
+messages and the room you talk in (both editable, both remembered), and the
+switches for what the message log shows.
+
+The settings are remembered in `~/.config/pda/prefs.conf` (override with
+`PDA_PREFS`), so they survive a restart.
+
 ### Environment
 
 | variable | what it does |
 |---|---|
 | `PDA_NAME` | the name other devices see (default `STALKER`) |
 | `PDA_ROOM` | the room name (default `SECTOR`) |
+| `PDA_PREFS` | where the settings file lives |
 | `PDA_RELAY_HOST` / `PDA_RELAY_PORT` | where the NET relay is (default `127.0.0.1:7788`) |
 | `PDA_BITCHAT_SOCK` / `PDA_BITCHAT_HOST` / `PDA_BITCHAT_PORT` | a bitchat bridge to plug into the local mesh |
 | `PDA_BITCHAT_PORT` | the mesh port (default 2425) |
 | `PDA_FIPS_SOCK` / `PDA_FIPS_CTL` | the fips daemon's api and control sockets |
 | `PDA_FIPS_PORT` | the FSP port to talk on (default 4600) |
-| `PDA_START_TAB` | start on a given tab (1 = Messages) - a test hook |
+| `PDA_START_TAB` | start on a given tab (1 = Messages, 6 = Other) - a test hook |
+| `PDA_OTHER_PAGE` / `PDA_OTHER_SUB` | open the Other tab on a given page - a test hook |
 | `PDA_TEST_SEND` | say this on startup - a test hook |
 
 ### GPS on the Pi
@@ -196,16 +227,17 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
 | `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
 | `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |
-| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |
-| `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
+| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier || `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
 | `tools/fetch_deps.sh` | fetch LVGL + reassemble the split map levels |
 
 ## Status
 
-Phase 3 (the map screen) is functional and the Messages tab is a real group
-chat over three carriers. Still to come: wallet/QR payments, camera, radio,
-real navigation stack, input abstraction (sim -> GPIO/evdev), and the Pi port
-(DRM/KMS + systemd boot-to-app).
+Phase 3 (the map screen) is functional, the Messages tab is a real group
+chat over three carriers, and the Other tab is the settings/connections/user
+panel. Still to come: wallet/QR payments, camera, radio, real navigation
+stack, input abstraction (sim -> GPIO/evdev), and the Pi port (DRM/KMS +
+systemd boot-to-app). The *Settings* and *Extras* pages of the Other tab are
+placeholders.
 
 ## License
 

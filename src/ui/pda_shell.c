@@ -1,6 +1,8 @@
 #include "ui/pda_shell.h"
 #include "ui/palette.h"
 #include "ui/chat_ui.h"
+#include "ui/other_ui.h"
+#include "ui/prefs.h"
 #include "assets/fonts/pda_fonts.h"
 #include "gps.h"
 #include "chat/chat.h"
@@ -61,7 +63,7 @@ typedef struct {
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
 
-#define PDA_VERSION   "v0.0.2-pre-alpha"
+#define PDA_VERSION   "v0.0.3-pre-alpha"
 
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
@@ -116,7 +118,6 @@ typedef struct {
     gps_fix_t gps;
     int zoom_idx;
     lv_obj_t * panels[TAB_COUNT - 1];
-    lv_obj_t * status_lbl;
     int active_tab;
     int focus_tab;
     int focus_sub;
@@ -318,12 +319,7 @@ static void update_gps(lv_timer_t * timer)
         fprintf(stderr, "[gps] lat=%.6f lon=%.6f valid=%d sim=%d marker=%d\n",
                 sh->gps.lat, sh->gps.lon, sh->gps.valid, sh->gps.simulated, sh->me_marker);
     if(sh->me_marker >= 0) map_update(sh);   /* move the player marker */
-    if(sh->status_lbl) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "%s\n%s\n%s", PDA_VERSION, gps_status(&sh->gps),
-                 sh->gps.valid ? "Nothing to tune yet." : "Waiting for a GPS fix...");
-        lv_label_set_text(sh->status_lbl, buf);
-    }
+    other_ui_status(PDA_VERSION, gps_status(&sh->gps));
     update_unread();
 }
 
@@ -1226,6 +1222,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     sh->lat_c = sh->gps.lat;
     sh->active_pack = -1;
 
+    prefs_init();      /* the saved settings, before anything reads them */
     chat_init();
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(PDA_BG), LV_PART_MAIN);
@@ -1262,14 +1259,9 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     };
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
+        else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, group);
         else sh->panels[i] = build_panel(sh->view, titles[i], bodies[i]);
     }
-
-    /* the last panel doubles as the status screen: version + GPS */
-    sh->status_lbl = lv_label_create(sh->panels[TAB_COUNT - 2]);
-    lv_label_set_text(sh->status_lbl, PDA_VERSION);
-    lv_obj_set_style_text_font(sh->status_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(sh->status_lbl, lv_color_hex(PDA_TAB_TEXT), LV_PART_MAIN);
 
     redraw_header();
     restyle_labels();

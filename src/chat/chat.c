@@ -1,5 +1,6 @@
 #include "chat/chat.h"
 #include "chat/json.h"
+#include "ui/prefs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +61,12 @@ const char * chat_room(void)
     return s_room;
 }
 
+void chat_set_room(const char * room)
+{
+    if(!room || !*room) return;
+    snprintf(s_room, sizeof(s_room), "%.*s", (int)sizeof(s_room) - 1, room);
+}
+
 void chat_add_transport(chat_transport_t * t)
 {
     if(!t || s_n_tr >= CHAT_TRANSPORT_MAX) return;
@@ -88,11 +95,20 @@ const chat_transport_t * chat_transport_get(int i)
 
 void chat_init(void)
 {
+    /* the environment wins over the saved settings: it is the explicit one */
     const char * name = getenv("PDA_NAME");
     if(name && *name) chat_set_identity(name);
+    else {
+        const char * saved = prefs_str("name", NULL);
+        if(saved && *saved) chat_set_identity(saved);
+    }
 
     const char * room = getenv("PDA_ROOM");
-    if(room && *room) snprintf(s_room, sizeof(s_room), "%.*s", (int)sizeof(s_room) - 1, room);
+    if(room && *room) chat_set_room(room);
+    else {
+        const char * saved = prefs_str("room", NULL);
+        if(saved && *saved) chat_set_room(saved);
+    }
 
     chat_bit_register();
     chat_fips_register();

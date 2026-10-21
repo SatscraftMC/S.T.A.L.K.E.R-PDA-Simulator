@@ -20,6 +20,12 @@ static bool s_env_pos = false;
 static double s_demo_lat = 32.6478;    /* Funchal */
 static double s_demo_lon = -16.9193;
 static double s_demo_phase = 0.0;
+static gps_fix_t s_current;
+
+const gps_fix_t * gps_current(void)
+{
+    return &s_current;
+}
 
 static double nmea_degrees(const char * value, const char * hemi)
 {
@@ -138,7 +144,7 @@ void gps_init(gps_fix_t * fix)
     gpsd_connect();
 }
 
-void gps_poll(gps_fix_t * fix)
+static void gps_poll_inner(gps_fix_t * fix)
 {
     if(s_demo) {
         /* slow drift so the live update is visible without hardware */
@@ -190,6 +196,12 @@ void gps_poll(gps_fix_t * fix)
             parse_gga(line, fix);
         }
     }
+}
+
+void gps_poll(gps_fix_t * fix)
+{
+    gps_poll_inner(fix);
+    s_current = *fix;
 }
 
 const char * gps_status(const gps_fix_t * fix)

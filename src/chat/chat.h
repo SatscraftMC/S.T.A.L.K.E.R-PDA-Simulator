@@ -81,6 +81,8 @@ void chat_add_transport(chat_transport_t * t);
 
 const char * chat_room(void);
 const char * chat_identity(void);
+void chat_set_identity(const char * name);
+void chat_set_room(const char * room);
 
 /* Build the wire envelope for a message. */
 void chat_envelope(char * out, size_t outn, const char * id, const char * sender,
