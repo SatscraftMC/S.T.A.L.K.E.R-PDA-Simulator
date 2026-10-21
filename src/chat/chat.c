@@ -132,9 +132,14 @@ static bool seen_before(const char * id, const char * sender, const char * text)
     for(int i = 0; i < SEEN_MAX; i++) {
         if(s_seen[i].ts == 0) continue;
         if(now - s_seen[i].ts > 30) continue;
-        if(id && *id && s_seen[i].id[0] && strcmp(s_seen[i].id, id) == 0) return true;
-        if(strcmp(s_seen[i].sender, sender) == 0 && strcmp(s_seen[i].text, text) == 0)
-            return true;
+        if(id && *id) {
+            /* the carriers all carry the id: only the very same message is
+               a duplicate, never somebody saying the same words again */
+            if(s_seen[i].id[0] && strcmp(s_seen[i].id, id) == 0) return true;
+        }
+        else if(strcmp(s_seen[i].sender, sender) == 0 && strcmp(s_seen[i].text, text) == 0) {
+            return true;      /* a carrier that does not carry an id */
+        }
     }
     return false;
 }
