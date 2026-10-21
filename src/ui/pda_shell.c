@@ -53,7 +53,7 @@
 
 
 static const tr_id_t g_layer_ids[SUB_COUNT] = {
-    TR_LAYER_TASK, TR_LAYER_STASH, TR_LAYER_AREA, TR_LAYER_SECOND, TR_LAYER_IMPORT
+    TR_LAYER_TAG, TR_LAYER_AREAS, TR_LAYER_TRADERS, TR_LAYER_STASHES, TR_LAYER_WAYPOINTS
 };
 
 static const tr_id_t g_tab_ids[TAB_COUNT] = {
@@ -131,6 +131,7 @@ typedef struct {
     double marker_lon[24];
     double marker_lat[24];
     int marker_size[24];
+    int marker_layer[24];   /* the button of the second row it belongs to */
     int marker_count;
     int me_marker;          /* index of the player marker (follows the GPS) */
     gps_fix_t gps;
@@ -234,6 +235,8 @@ static void draw_parallelogram(int ox, int oy, int w, int h, int slant,
 }
 
 /* ---------- header painting ---------- */
+
+static void apply_layers(shell_t * sh);   /* the markers of a layer */
 
 static void redraw_header(void)
 {
@@ -439,7 +442,8 @@ static void on_sub_click(lv_event_t * e)
 {
     shell_t * sh = &g_sh;
     int i = (int)(lv_intptr_t)lv_event_get_user_data(e);
-    sh->sub_on[i] = !sh->sub_on[i];   /* visual toggle only - no layer content yet */
+    sh->sub_on[i] = !sh->sub_on[i];   /* and the layer comes with it */
+    apply_layers(sh);
     redraw_header();
     restyle_labels();
 }
@@ -617,17 +621,17 @@ typedef struct {
 
 static const map_label_t g_map_labels[] = {
     /* tier 0 - always visible */
-    {"FUNCHAL",               -16.9193, 32.6478, 0, 2, 0,   0},
+    {"FUNCHAL",               -16.9193, 32.6478, 0, 2, 46,  0},
     {"PAUL DA SERRA",         -17.1400, 32.7520, 0, 1, 0,   0},
-    {"PICO RUIVO",            -16.9422, 32.7569, 0, 1, -8,  0},
-    {"PONTA DE SAO LOURENCO", -16.6900, 32.7260, 0, 1, 0,   0},
+    {"PICO RUIVO",            -16.9422, 32.7569, 0, 1, -24, -14},
+    {"PONTA DE SAO LOURENCO", -16.6900, 32.7260, 0, 1, 0,  -22},
     {"DESERTAS",              -16.5400, 32.5600, 0, 2, 0,   0},
     {"PORTO SANTO",           -16.3100, 33.0450, 0, 2, 0,   0},
     /* tier 1 - zoom >= 128 */
     {"CAMARA DE LOBOS",       -17.0128, 32.6497, 1, 0, 0, -10},
     {"RIBEIRA BRAVA",         -17.0528, 32.6719, 1, 0, 0, -10},
     {"PONTA DO SOL",          -17.0999, 32.6800, 1, 0, 0, -10},
-    {"CALHETA",               -17.1700, 32.7167, 1, 0, 0,  16},
+    {"CALHETA",               -17.1700, 32.7167, 1, 0, 0,  20},
     {"PONTA DO PARGO",        -17.2514, 32.7858, 1, 0, 0, -10},
     {"PORTO MONIZ",           -17.0669, 32.8697, 1, 0, 0, -10},
     {"SAO VICENTE",           -17.0497, 32.7883, 1, 0, 0, -10},
@@ -638,13 +642,13 @@ static const map_label_t g_map_labels[] = {
     {"SANTA CRUZ",            -16.7836, 32.6925, 2, 0, 0,  14},
     {"CANICO",                -16.8439, 32.6611, 2, 0, 0, -10},
     {"CAMACHA",               -16.7706, 32.6906, 2, 0, 0, -12},
-    {"CURRAL DAS FREIRAS",    -16.9722, 32.7114, 2, 0, 0, -10},
+    {"CURRAL DAS FREIRAS",    -16.9722, 32.7114, 2, 0, 0, -24},
     {"MONTE",                 -16.9036, 32.6786, 2, 0, 0, -10},
     {"RIBEIRO FRIO",          -16.9042, 32.7406, 2, 0, 0, -10},
     {"PICO DO ARIEIRO",       -16.9267, 32.7161, 2, 0, 0, -10},
     {"FAIAL",                 -16.8606, 32.8017, 2, 0, 0, -10},
     {"CANICAL",               -16.6956, 32.7394, 2, 0, 0,  14},
-    {"AIRPORT",               -16.7745, 32.6979, 2, 0, 0, -12},
+    {"AIRPORT",               -16.7745, 32.6979, 2, 0, 0, -18},
 };
 
 #define LABEL_COUNT (sizeof(g_map_labels) / sizeof(g_map_labels[0]))
@@ -857,14 +861,17 @@ static double pack_best_step(const map_pack_t * pk, int zn, bool * from_mip)
 
 /* ---------- markers ---------- */
 
+/* the shape of a marker */
+enum { MARK_RING, MARK_CIRCLE, MARK_SQUARE };
+
 static lv_obj_t * make_marker(shell_t * sh, lv_obj_t * map, double lon, double lat,
-                              int size, uint32_t color, bool outline_only)
+                              int size, uint32_t color, int shape, int layer)
 {
     lv_obj_t * o = lv_obj_create(map);
     lv_obj_set_pos(o, 0, 0);
     lv_obj_set_size(o, size, size);
-    lv_obj_set_style_radius(o, 50, LV_PART_MAIN);
-    if(outline_only) {
+    if(shape == MARK_RING) {
+        lv_obj_set_style_radius(o, 50, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(o, 2, LV_PART_MAIN);
         lv_obj_set_style_border_color(o, lv_color_hex(color), LV_PART_MAIN);
@@ -873,6 +880,7 @@ static lv_obj_t * make_marker(shell_t * sh, lv_obj_t * map, double lon, double l
         lv_obj_set_style_bg_color(o, lv_color_hex(color), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(o, shape == MARK_CIRCLE ? 50 : 0, LV_PART_MAIN);
     }
     lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
     lv_obj_set_scrollable(o, false);
@@ -883,8 +891,47 @@ static lv_obj_t * make_marker(shell_t * sh, lv_obj_t * map, double lon, double l
         sh->marker_lon[i] = lon;
         sh->marker_lat[i] = lat;
         sh->marker_size[i] = size;
+        sh->marker_layer[i] = layer;
     }
     return o;
+}
+
+/* what the buttons of the second row show on the map.
+   The layer numbers are the numbers of the buttons (1..4). */
+typedef struct {
+    int layer;
+    const char * name;
+    double lon, lat;
+    int size;
+    pda_col_id_t color;      /* the palette is a runtime thing: an id, not a colour */
+    int shape;
+} map_point_t;
+
+static const map_point_t g_map_points[] = {
+    /* Areas - the two big ones */
+    { 1, "Curral das Freiras",    -16.9722, 32.7114, 26, PDA_C_MAP_AREA,      MARK_RING },
+    { 1, "Ponta de Sao Lourenco", -16.6900, 32.7260, 26, PDA_C_MAP_AREA,      MARK_RING },
+    /* Traders */
+    { 2, "Funchal harbour",      -16.9247, 32.6400, 13, PDA_C_MAP_TRADER,    MARK_CIRCLE },
+    { 2, "Canico",                -16.8439, 32.6611, 13, PDA_C_MAP_TRADER,    MARK_CIRCLE },
+    /* Stashes */
+    { 3, "Calheta",               -17.1700, 32.7167, 13, PDA_C_MAP_STASH,     MARK_SQUARE },
+    { 3, "Pico Ruivo",            -16.9422, 32.7569, 13, PDA_C_MAP_STASH,     MARK_SQUARE },
+    /* Waypoints */
+    { 4, "Airport",               -16.7745, 32.6979, 16, PDA_C_MAP_IMPORTANT, MARK_RING },
+    { 4, "Porto Santo",           -16.3100, 33.0450, 16, PDA_C_MAP_IMPORTANT, MARK_RING },
+};
+
+#define MAP_POINT_COUNT (sizeof(g_map_points) / sizeof(g_map_points[0]))
+
+/* the markers of a layer are shown when its button is on */
+static void apply_layers(shell_t * sh)
+{
+    for(int i = 0; i < sh->marker_count; i++) {
+        int layer = sh->marker_layer[i];
+        if(layer < 0) continue;                 /* the player is always there */
+        lv_obj_set_hidden(sh->markers[i], !sh->sub_on[layer]);
+    }
 }
 
 /* ---------- rendering ---------- */
@@ -1192,12 +1239,18 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     }
     map_update(sh);
 
-    /* markers (geographic) - only the player marker for now;
-       stashes / areas / important objects come back with the sub-row */
+    /* markers (geographic) - the player and the layers of the second row */
     /* the player marker sits on the GPS position (see update_gps) */
     sh->me_marker = sh->marker_count;
-    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 28, PDA_MAP_ME, true);
-    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 16, PDA_MAP_ME, false);
+    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 28, PDA_MAP_ME, MARK_RING, -1);
+    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 16, PDA_MAP_ME, MARK_CIRCLE, -1);
+
+    /* and the layers: areas, traders, stashes, waypoints */
+    for(size_t i = 0; i < MAP_POINT_COUNT; i++) {
+        const map_point_t * p = &g_map_points[i];
+        make_marker(sh, map, p->lon, p->lat, p->size, pda_col(p->color), p->shape, p->layer);
+    }
+    apply_layers(sh);
 
     /* overlay: zoom buttons + attribution, fixed over the map */
     lv_obj_t * overlay = lv_obj_create(parent);
@@ -1305,7 +1358,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     sh->active_tab = 0;
     sh->focus_tab = -1;
     sh->focus_sub = -1;
-    sh->sub_on[2] = true;
+    sh->sub_on[1] = true;          /* the areas are on at boot */
     sh->me_marker = -1;
     gps_init(&sh->gps);
     sh->zoom_idx = 4;            /* 256 = 1 world texel per screen px */

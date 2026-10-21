@@ -116,6 +116,25 @@ def click(x, y):
     time.sleep(0.5)
 
 
+def click_once(x, y):
+    """exactly one click: a button that toggles would be toggled back by
+       the four clicks the ordinary click() makes"""
+    from Xlib import display, X
+    from Xlib.ext import xtest
+    focus_window()
+    d = display.Display()
+    sx, sy = OX + x, OY + y
+    xtest.fake_input(d, X.MotionNotify, x=sx, y=sy)
+    d.sync()
+    time.sleep(0.08)
+    xtest.fake_input(d, X.ButtonPress, 1)
+    d.sync()
+    time.sleep(0.08)
+    xtest.fake_input(d, X.ButtonRelease, 1)
+    d.sync()
+    time.sleep(0.4)
+
+
 def type_text(s):
     """type a string with XTEST key events (shift for the capitals)"""
     from Xlib import display, X
@@ -547,6 +566,59 @@ def test_caret():
         stop(p, f)
 
 
+def test_map_layers():
+    print("12. the map layers", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478",
+                            "PDA_GPS_LON": "-16.9193"}, "layers")
+    try:
+        time.sleep(3.0)
+
+        COLOURS = {"area": (255, 255, 255),        # the rings
+                   "trader": (95, 191, 106),      # the green dots
+                   "stash": (255, 211, 42),       # the yellow squares
+                   "waypoint": (243, 156, 18)}    # the orange rings
+        LAYER_X = {"trader": 163 + 148, "stash": 163 + 296, "waypoint": 163 + 444}
+
+        def count(path, colour):
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            w, h = im.size
+            n = 0
+            for y in range(69 + 32, h):       # the map's area (the title bar is 32)
+                for x in range(w):
+                    r, g, b = px[x, y]
+                    if abs(r - colour[0]) < 20 and abs(g - colour[1]) < 20 \
+                       and abs(b - colour[2]) < 20:
+                        n += 1
+            return n
+
+        # the markers are a few kilometres apart: zoom out until they are in view
+        for i in range(3):
+            click(770, 69 + 370 + 14)         # the zoom out button
+        time.sleep(0.8)
+
+        base = {k: count(shot("lay_base"), c) for k, c in COLOURS.items()}
+        note(base["area"] > 0, f"the areas are on at boot ({base['area']} pixels)")
+
+        for i, (name, colour) in enumerate(COLOURS.items()):
+            if name == "area":
+                continue
+            x = LAYER_X[name]
+            y = 45 - (list(LAYER_X).index(name))
+            click_once(x, y)
+            on = count(shot("lay_%s_on" % name), colour)
+            click_once(x, y)
+            off = count(shot("lay_%s_off" % name), colour)
+            note(on > base[name] and off <= base[name],
+                 f"the {name} come and go with their button "
+                 f"({base[name]} -> {on} -> {off})".replace("the trader come", "the traders come")
+                  .replace("the stash come", "the stashes come")
+                  .replace("the waypoint come", "the waypoints come"))
+    finally:
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -559,6 +631,7 @@ TESTS = {
     "channel": test_mesh_channel,
     "recenter": test_recenter,
     "caret": test_caret,
+    "layers": test_map_layers,
 }
 
 def main():

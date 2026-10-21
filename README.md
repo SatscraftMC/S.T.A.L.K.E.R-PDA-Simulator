@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.1.7-alpha**
+**v0.1.8-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -27,6 +27,9 @@ on a desktop environment.
 - **27 named places and areas** (Funchal, Curral das Freiras, Pico Ruivo,
   Paúl da Serra, Porto Santo, Desertas, ...) drawn on the map, revealed in
   tiers as you zoom in.
+- **Four layers on the map** - the strip under the tab bar switches
+  *Areas* (white rings), *Traders* (green dots), *Stashes* (yellow squares)
+  and *Waypoints* (orange rings) on and off; the blue dot is where you are.
 - **Pack-based map system**: every region is a self-contained folder, so adding
   a new map tile needs no code change (see below).
 - **One room, every carrier** (the Messages tab): what you type goes out on
