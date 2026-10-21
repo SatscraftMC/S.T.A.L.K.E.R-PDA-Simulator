@@ -58,6 +58,14 @@ static void scroll_to_bottom(void)
     lv_obj_scroll_to_view(g_ui.list, LV_ANIM_OFF);
 }
 
+/* is the log showing its newest line? */
+static bool at_bottom(void)
+{
+    int y = lv_obj_get_scroll_y(g_ui.list);
+    int max = lv_obj_get_scroll_bottom(g_ui.list);
+    return y >= max - 4;
+}
+
 static void add_row(const chat_msg_t * m)
 {
     char tbuf[8];
@@ -168,6 +176,7 @@ static void add_row(const chat_msg_t * m)
 static void refresh(void)
 {
     int count = chat_count();
+    bool stick = at_bottom();
     if(count < g_ui.rendered) {     /* the log was trimmed: rebuild */
         lv_obj_clean(g_ui.list);
         g_ui.rows = 0;
@@ -179,6 +188,7 @@ static void refresh(void)
         if(m) add_row(m);
     }
     g_ui.rendered = count;
+    if(stick && count > 0) scroll_to_bottom();
 
     /* the carrier strip */
     char status[128] = "";
