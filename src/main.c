@@ -12,6 +12,7 @@
 #define SDL_EVENT_MOUSEWHEEL 0x403
 #endif
 #include <signal.h>
+#include <stdio.h>
 #include <unistd.h>
 
 /* SDL installs its own SIGTERM/SIGINT handler that tears the video subsystem
@@ -38,6 +39,10 @@ static int SDLCALL on_sdl_event(void * userdata, SDL_Event * ev)
 int main(void)
 {
     lv_init();
+
+    /* say which build this is: a process that was started before the last
+       rebuild keeps the old code, and this is how you tell */
+    fprintf(stderr, "[pda] %s\n", PDA_VERSION);
 
     lv_display_t * disp = lv_sdl_window_create(800, 480);
     lv_sdl_window_set_title(disp, "PDA // Simulator");

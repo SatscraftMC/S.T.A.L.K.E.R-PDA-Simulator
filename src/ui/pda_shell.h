@@ -3,6 +3,10 @@
 
 #include "lvgl/lvgl.h"
 
+/* which build this is - the app says it when it starts, so a stale process
+   is easy to spot */
+#define PDA_VERSION   "v0.1.4-alpha"
+
 lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group);
 
 /* Mouse wheel over the map: zoom one step towards the cursor. (x, y) are

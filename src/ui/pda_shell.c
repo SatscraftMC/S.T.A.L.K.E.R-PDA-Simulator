@@ -80,8 +80,6 @@ typedef struct {
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
 
-#define PDA_VERSION   "v0.1.3-alpha"
-
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
 #define NUM_MIPS      3
