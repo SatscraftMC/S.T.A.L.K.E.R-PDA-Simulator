@@ -907,7 +907,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_t * box = lv_button_create(root);
         lv_obj_set_size(box, NAV_W - 12, 26);
         lv_obj_set_pos(box, 6, 8 + i * 30);
-        lv_obj_set_style_pad_all(box, 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(box, 0, LV_PART_MAIN);
         lv_obj_set_style_radius(box, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(box, 0, LV_PART_MAIN);
         lv_obj_set_style_outline_width(box, 0, LV_PART_MAIN);
@@ -916,9 +916,9 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 
         lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
                              PDA_TAB_TEXT);
-        lv_obj_set_pos(l, 4, 4);
         lv_obj_set_width(l, NAV_W - 12 - 16);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);   /* centred in the height */
         g_ui.nav_lbl[i] = l;
 
         lv_obj_set_clickable(box, true);
@@ -931,7 +931,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_t * b = lv_button_create(root);
         lv_obj_set_size(b, SUB_W, SUB_H);
         lv_obj_set_pos(b, SUB_X0, 8 + i * (SUB_H + 4));
-        lv_obj_set_style_pad_all(b, 2, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
         lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
         lv_obj_set_style_outline_width(b, 0, LV_PART_MAIN);
@@ -939,9 +939,9 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         g_ui.sub_btn[i] = b;
 
         lv_obj_t * l = label(b, 0, 0, 0, "", &pda_font_mono_10, PDA_TAB_TEXT);
-        lv_obj_set_pos(l, 2, 3);
-        lv_obj_set_width(l, SUB_W - 4);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_width(l, SUB_W - 8);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 6, 0);   /* centred in the height */
         g_ui.sub_lbl[i] = l;
 
         lv_obj_set_clickable(b, true);
