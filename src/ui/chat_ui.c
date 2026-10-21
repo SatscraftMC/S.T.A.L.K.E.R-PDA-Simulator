@@ -252,6 +252,9 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(root, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(root, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(root, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(root, LV_DIR_NONE);
     lv_obj_set_scrollable(root, false);
@@ -259,8 +262,8 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the carrier strip --- */
     lv_obj_t * strip = lv_obj_create(root);
-    lv_obj_set_pos(strip, 0, 0);
-    lv_obj_set_size(strip, LIST_W, STRIP_H);
+    lv_obj_set_size(strip, lv_pct(100), STRIP_H);
+    lv_obj_set_flex_grow(strip, 0);
     lv_obj_set_style_bg_color(strip, lv_color_hex(PDA_CHAT_STRIP), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
@@ -305,8 +308,8 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the log --- */
     lv_obj_t * list = lv_obj_create(root);
-    lv_obj_set_pos(list, 0, STRIP_H);
-    lv_obj_set_size(list, LIST_W, 350);
+    lv_obj_set_size(list, lv_pct(100), 0);
+    lv_obj_set_flex_grow(list, 1);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(list, 0, LV_PART_MAIN);
@@ -322,8 +325,8 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* --- the compose row --- */
     lv_obj_t * compose = lv_obj_create(root);
-    lv_obj_set_pos(compose, 0, 350);
-    lv_obj_set_size(compose, LIST_W, COMPOSE_H);
+    lv_obj_set_size(compose, lv_pct(100), COMPOSE_H);
+    lv_obj_set_flex_grow(compose, 0);
     lv_obj_set_style_bg_color(compose, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(compose, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(compose, 0, LV_PART_MAIN);

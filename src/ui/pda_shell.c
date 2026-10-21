@@ -19,6 +19,9 @@
 #define TAB_COUNT   7
 #define HEADER_W    800
 #define HEADER_H    58
+/* the header is only as tall as it has to be: the map tab has the layer
+   strip under the tabs, the other tabs have nothing there */
+#define HEADER_H_TABS 34
 
 #define MAP_VIEW_W  800
 #define MAP_VIEW_H  411
@@ -86,6 +89,7 @@ typedef struct {
 
 typedef struct {
     lv_obj_t * root;
+    lv_obj_t * header;
     lv_obj_t * canvas;
     lv_obj_t * clock_lbl;
     lv_obj_t * title_lbl;
@@ -331,6 +335,13 @@ static void show_view(shell_t * sh)
     lv_obj_set_hidden(sh->map, !is_map);
     lv_obj_set_hidden(sh->overlay, !is_map);
 
+    /* the header shrinks to the tab row when there is no layer strip under
+       it, so the panel below starts right under the tabs */
+    if(sh->header) {
+        int hh = is_map ? HEADER_H : HEADER_H_TABS;
+        if(lv_obj_get_height(sh->header) != hh) lv_obj_set_height(sh->header, hh);
+    }
+
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == sh->active_tab - 1) lv_obj_set_hidden(sh->panels[i], false);
         else lv_obj_set_hidden(sh->panels[i], true);
@@ -417,6 +428,7 @@ static void build_header(shell_t * sh, lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_pad_all(header, 0, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(header, LV_DIR_NONE);
+    sh->header = header;
 
     sh->canvas = lv_canvas_create(header);
     lv_obj_set_pos(sh->canvas, 0, 0);
