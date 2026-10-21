@@ -1,6 +1,7 @@
 #include "ui/pda_shell.h"
 #include "ui/palette.h"
 #include "assets/fonts/pda_fonts.h"
+#include "gps.h"
 
 #include <string.h>
 #include <time.h>
@@ -19,6 +20,7 @@
 
 #define MAP_VIEW_W  800
 #define MAP_VIEW_H  411
+#define MAP_VIEW_Y  69     /* the map's y offset inside the 800x480 screen */
 
 
 #define SUB_COUNT   5
@@ -53,6 +55,8 @@ typedef struct {
     int w, h;
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
+
+#define PDA_VERSION   "v0.0.1-pre-alpha"
 
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
@@ -102,8 +106,11 @@ typedef struct {
     double marker_lat[24];
     int marker_size[24];
     int marker_count;
+    int me_marker;          /* index of the player marker (follows the GPS) */
+    gps_fix_t gps;
     int zoom_idx;
     lv_obj_t * panels[TAB_COUNT - 1];
+    lv_obj_t * status_lbl;
     int active_tab;
     int focus_tab;
     int focus_sub;
@@ -269,7 +276,33 @@ static void update_clock(lv_timer_t * timer)
     localtime_r(&t, &lt);
     char buf[8];
     strftime(buf, sizeof(buf), "%H:%M", &lt);
+    if(getenv("PDA_DEBUG")) fprintf(stderr, "[clock] %s\n", buf);
     lv_label_set_text(g_sh.clock_lbl, buf);
+}
+
+/* ---------- GPS ---------- */
+
+static void map_update(shell_t * sh);
+
+static void update_gps(lv_timer_t * timer)
+{
+    LV_UNUSED(timer);
+    shell_t * sh = &g_sh;
+    gps_poll(&sh->gps);
+    if(sh->me_marker >= 0 && sh->me_marker < sh->marker_count) {
+        sh->marker_lon[sh->me_marker] = sh->gps.lon;
+        sh->marker_lat[sh->me_marker] = sh->gps.lat;
+    }
+    if(getenv("PDA_DEBUG"))
+        fprintf(stderr, "[gps] lat=%.6f lon=%.6f valid=%d sim=%d marker=%d\n",
+                sh->gps.lat, sh->gps.lon, sh->gps.valid, sh->gps.simulated, sh->me_marker);
+    if(sh->me_marker >= 0) map_update(sh);   /* move the player marker */
+    if(sh->status_lbl) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s\n%s\n%s", PDA_VERSION, gps_status(&sh->gps),
+                 sh->gps.valid ? "Nothing to tune yet." : "Waiting for a GPS fix...");
+        lv_label_set_text(sh->status_lbl, buf);
+    }
 }
 
 /* ---------- view switching ---------- */
@@ -427,6 +460,7 @@ static void build_header(shell_t * sh, lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_text_font(sh->clock_lbl, &pda_font_mono_14, LV_PART_MAIN);
 
     lv_timer_create(update_clock, 1000, NULL);
+    lv_timer_create(update_gps, 1000, NULL);
 }
 
 /* ---------- map ---------- */
@@ -465,6 +499,11 @@ static double geo_lat_from_w(double w)
 {
     double n = M_PI * (1.0 - 2.0 * w / ((double)(1ull << REF_ZOOM) * 256.0));
     return atan(sinh(n)) * 180.0 / M_PI;
+}
+
+static double geo_lon_from_w(double w)
+{
+    return w / ((double)(1ull << REF_ZOOM) * 256.0) * 360.0 - 180.0;
 }
 
 static double geo_w_per_deg_lon(void)
@@ -574,7 +613,7 @@ static void load_packs(shell_t * sh)
 
         map_pack_t pk;
         memset(&pk, 0, sizeof(pk));
-        snprintf(pk.name, sizeof(pk.name), "%s", e->d_name);
+        snprintf(pk.name, sizeof(pk.name), "%.*s", (int)sizeof(pk.name) - 1, e->d_name);
         int lz[8], lw[8], lh[8], lox[8], loy[8], n = 0;
         while(fgets(line, sizeof(line), f)) {
             int z, W, H, ox, oy;
@@ -584,7 +623,7 @@ static void load_packs(shell_t * sh)
             }
             char val[256];
             if(cfg_get(line, "name", val, sizeof(val)))
-                snprintf(pk.name, sizeof(pk.name), "%s", val);
+                snprintf(pk.name, sizeof(pk.name), "%.*s", (int)sizeof(pk.name) - 1, val);
             else if(cfg_get(line, "lon0", val, sizeof(val))) pk.lon0 = atof(val);
             else if(cfg_get(line, "lon1", val, sizeof(val))) pk.lon1 = atof(val);
             else if(cfg_get(line, "lat0", val, sizeof(val))) pk.lat0 = atof(val);
@@ -920,14 +959,14 @@ static void map_update(shell_t * sh)
     if(getenv("PDA_DEBUG")) {
         for(int i = 0; i < sh->n_packs; i++) {
             const map_level_t * lv = pick_pack_level(&sh->packs[i], zn);
-            fprintf(stderr, "[pack] %-14s levels=%d best=%s step=%g contains=%d area=%g\n",
+            fprintf(stderr, "[pack] %-14.14s levels=%d best=%s step=%g contains=%d area=%g\n",
                     sh->packs[i].name, sh->packs[i].n_lv,
                     lv ? "yes" : "no", lv ? ldexp(1.0, lv->w_exp) : 0.0,
                     (sh->lon_c >= sh->packs[i].lon0 && sh->lon_c <= sh->packs[i].lon1 &&
                      sh->lat_c <= sh->packs[i].lat0 && sh->lat_c >= sh->packs[i].lat1),
                     (sh->packs[i].lon1 - sh->packs[i].lon0) * (sh->packs[i].lat1 - sh->packs[i].lat0));
         }
-        fprintf(stderr, "[pack] active=%s zn=%d\n",
+        fprintf(stderr, "[pack] active=%-.14s zn=%d\n",
                 sh->active_pack >= 0 ? sh->packs[sh->active_pack].name : "none", zn);
     }
     if(sh->pack_lbl && sh->active_pack >= 0) {
@@ -946,27 +985,49 @@ static void map_update(shell_t * sh)
     lv_obj_invalidate(sh->map_canvas);
 }
 
-static void map_zoom(shell_t * sh, int dir)
+/* Zoom by one step. (ax, ay) is the anchor in map coordinates: the world
+   point under it stays under it. Pass the screen centre (400, 205) to zoom
+   around the middle of the view (what the +/- buttons do). */
+static void map_zoom(shell_t * sh, int dir, int ax, int ay)
 {
     int ni = sh->zoom_idx + dir;
     if(ni < 0 || ni >= ZOOM_STEPS) return;
-    sh->zoom_idx = ni;   /* lon_c/lat_c untouched = anchored on the screen centre */
+    double old_scale = g_zoom_levels[sh->zoom_idx] / 256.0;
+    double new_scale = g_zoom_levels[ni] / 256.0;
+    double wx = geo_w_x(sh->lon_c) + (ax - 400) / old_scale;
+    double wy = geo_w_y(sh->lat_c) + (ay - 205) / old_scale;
+    sh->zoom_idx = ni;
+    sh->lon_c = geo_lon_from_w(wx - (ax - 400) / new_scale);
+    sh->lat_c = geo_lat_from_w(wy - (ay - 205) / new_scale);
     map_update(sh);
 }
 
 static void on_zin(lv_event_t * e)
 {
     LV_UNUSED(e);
-    map_zoom(&g_sh, +1);
+    map_zoom(&g_sh, +1, 400, 205);
 }
 
 static void on_zout(lv_event_t * e)
 {
     LV_UNUSED(e);
-    map_zoom(&g_sh, -1);
+    map_zoom(&g_sh, -1, 400, 205);
 }
 
 static lv_point_t g_last_pt;
+
+/* the mouse wheel is handled in main.c (SDL level) because LVGL 9 routes the
+   wheel to the focused object; we want it to zoom towards the cursor. */
+void pda_shell_wheel(int diff, int x, int y)
+{
+    shell_t * sh = &g_sh;
+    if(diff == 0) return;
+    if(sh->active_tab != 0) return;               /* the map is on screen */
+    int ax = x;
+    int ay = y - MAP_VIEW_Y;
+    if(ax < 0 || ax >= MAP_VIEW_W || ay < 0 || ay >= MAP_VIEW_H) return;
+    map_zoom(sh, diff > 0 ? +1 : -1, ax, ay);
+}
 
 static void on_map_press(lv_event_t * e)
 {
@@ -1029,8 +1090,10 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
 
     /* markers (geographic) - only the player marker for now;
        stashes / areas / important objects come back with the sub-row */
-    make_marker(sh, map, -16.96, 32.66, 28, PDA_MAP_ME, true);   /* me: Funchal */
-    make_marker(sh, map, -16.96, 32.66, 16, PDA_MAP_ME, false);
+    /* the player marker sits on the GPS position (see update_gps) */
+    sh->me_marker = sh->marker_count;
+    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 28, PDA_MAP_ME, true);
+    make_marker(sh, map, sh->gps.lon, sh->gps.lat, 16, PDA_MAP_ME, false);
 
     /* overlay: zoom buttons + attribution, fixed over the map */
     lv_obj_t * overlay = lv_obj_create(parent);
@@ -1123,6 +1186,10 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     sh->focus_tab = -1;
     sh->focus_sub = -1;
     sh->sub_on[2] = true;
+    sh->me_marker = -1;
+    gps_init(&sh->gps);
+    sh->lon_c = sh->gps.lon;
+    sh->lat_c = sh->gps.lat;
     sh->zoom_idx = 4;            /* 256 = 1 world texel per screen px */
     sh->lon_c = -16.96;          /* Funchal */
     sh->lat_c = 32.66;
@@ -1162,6 +1229,12 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     };
     for(int i = 0; i < TAB_COUNT - 1; i++)
         sh->panels[i] = build_panel(sh->view, titles[i], bodies[i]);
+
+    /* the last panel doubles as the status screen: version + GPS */
+    sh->status_lbl = lv_label_create(sh->panels[TAB_COUNT - 2]);
+    lv_label_set_text(sh->status_lbl, PDA_VERSION);
+    lv_obj_set_style_text_font(sh->status_lbl, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sh->status_lbl, lv_color_hex(PDA_TAB_TEXT), LV_PART_MAIN);
 
     redraw_header();
     restyle_labels();

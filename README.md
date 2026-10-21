@@ -1,5 +1,7 @@
 # S.T.A.L.K.E.R PDA Simulator
 
+**v0.0.1-pre-alpha**
+
 An open-source handheld communicator UI in the spirit of the STALKER PDA: a
 gripped, button-driven device with an offline map, radio/messages, contacts and
 a Lightning wallet.
@@ -23,6 +25,7 @@ desktop environment.
 
 ## Features so far
 
+
 - **Offline map** with real Esri satellite imagery of Madeira, zoom levels
   **64 - 10923** (from "whole archipelago" down to ~1 m per pixel).
 - **27 named places and areas** (Funchal, Curral das Freiras, Pico Ruivo,
@@ -32,6 +35,11 @@ desktop environment.
   a new map tile needs no code change (see below).
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
+- The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
+  `PDA_GPS_LAT`/`PDA_GPS_LON` to force a position, `PDA_GPS_DEMO=1` for a slow
+  drift without hardware).
+- **Mouse wheel zooms towards the cursor** (the world point under the pointer
+  stays under the pointer); the +/- buttons zoom around the middle of the view.
 
 ## Build
 

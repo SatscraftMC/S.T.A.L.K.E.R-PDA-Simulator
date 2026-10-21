@@ -1,7 +1,16 @@
 #include "app.h"
+#include "ui/pda_shell.h"
 
 #include "lvgl/lvgl.h"
 
+#include <SDL2/SDL.h>
+
+/* Some SDL header/package combinations on this box are older than the
+   runtime library and lack the modern event enum - use the documented
+   numeric value (SDL 2.0.18+) and the legacy alias as a fallback. */
+#ifndef SDL_EVENT_MOUSEWHEEL
+#define SDL_EVENT_MOUSEWHEEL 0x403
+#endif
 #include <signal.h>
 #include <unistd.h>
 
@@ -14,6 +23,18 @@ static void on_term(int sig)
     _exit(0);
 }
 
+/* SDL sees the wheel event before LVGL does; forward it to the map. */
+static int SDLCALL on_sdl_event(void * userdata, SDL_Event * ev)
+{
+    LV_UNUSED(userdata);
+    if(ev->type == SDL_EVENT_MOUSEWHEEL || ev->type == SDL_MOUSEWHEEL) {
+        int mx = 0, my = 0;
+        SDL_GetMouseState(&mx, &my);
+        pda_shell_wheel(ev->wheel.y, mx, my);
+    }
+    return 1;   /* keep the event for everyone else */
+}
+
 int main(void)
 {
     lv_init();
@@ -23,10 +44,13 @@ int main(void)
 
     lv_sdl_mouse_create();
     lv_sdl_keyboard_create();
-    lv_sdl_mousewheel_create();
+    /* the wheel is read directly from SDL (see on_sdl_event) so the map can
+       zoom towards the cursor - LVGL 9 would route it to the focused object */
 
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
+
+    SDL_AddEventWatch(on_sdl_event, NULL);
 
     pda_app_init();
 

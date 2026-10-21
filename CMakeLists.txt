@@ -26,3 +26,11 @@ target_link_libraries(pda PRIVATE lvgl::lvgl Threads::Threads)
 if(UNIX)
   target_link_libraries(pda PRIVATE m)
 endif()
+
+# SDL2 is used directly for the mouse wheel (LVGL 9 only routes the wheel to
+# the focused object, but we want to zoom towards the cursor under the mouse)
+find_package(SDL2 QUIET)
+if(SDL2_FOUND)
+  target_include_directories(pda PRIVATE ${SDL2_INCLUDE_DIRS})
+  target_link_libraries(pda PRIVATE ${SDL2_LIBRARIES})
+endif()
