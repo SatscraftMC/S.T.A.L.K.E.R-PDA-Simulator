@@ -1,6 +1,7 @@
 #include "ui/other_ui.h"
 #include "ui/palette.h"
 #include "ui/prefs.h"
+#include "ui/lvutil.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "gps.h"
@@ -52,6 +53,7 @@ static const char * const g_sub_names[PAGE_COUNT][8] = {
 };
 
 static void other_ui_refresh(void);
+static void no_theme_transition(lv_obj_t * o);
 static void other_ui_on_name(lv_event_t * e);
 static void other_ui_on_room(lv_event_t * e);
 static void on_save_name(lv_event_t * e);
@@ -177,6 +179,7 @@ static lv_obj_t * toggle(lv_obj_t * parent, bool on)
     lv_obj_set_style_border_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
     lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+    lv_no_transition(b);
     return b;
 }
 
@@ -396,6 +399,7 @@ static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb)
     lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+    lv_no_transition(b);
     lv_obj_t * l = lv_label_create(b);
     lv_label_set_text(l, "SAVE");
     lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
@@ -405,7 +409,10 @@ static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb)
     return b;
 }
 
-/* flash the button so the user knows it took */
+/* the pending "SAVED" flash: the label it points at is deleted with the
+   page, so the timer has to go before the page is rebuilt */
+static lv_timer_t * s_flash_timer = NULL;
+
 static void saved_flash_cb(lv_timer_t * timer)
 {
     lv_obj_t * l = (lv_obj_t *)lv_timer_get_user_data(timer);
@@ -413,6 +420,7 @@ static void saved_flash_cb(lv_timer_t * timer)
         lv_label_set_text(l, "SAVE");
         lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     }
+    s_flash_timer = NULL;      /* the timer deletes itself: say so */
     lv_timer_delete(timer);
 }
 
@@ -421,9 +429,14 @@ static void flash_saved(lv_obj_t * btn, lv_obj_t * lbl)
     if(!btn || !lbl) return;
     lv_label_set_text(lbl, "SAVED");
     lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_CARRIER_UP), LV_PART_MAIN);
-    lv_timer_t * t = lv_timer_create(saved_flash_cb, 1500, NULL);
-    lv_timer_set_user_data(t, lbl);
-    lv_timer_resume(t);
+    if(s_flash_timer) {
+        lv_timer_t * old = s_flash_timer;
+        s_flash_timer = NULL;
+        lv_timer_delete(old);
+    }
+    s_flash_timer = lv_timer_create(saved_flash_cb, 1500, NULL);
+    lv_timer_set_user_data(s_flash_timer, lbl);
+    lv_timer_resume(s_flash_timer);
 }
 
 /* a row with a switch on the right */
@@ -503,6 +516,16 @@ static void page_extras(void)
 
 static void build_content(void)
 {
+    /* the flash timer points at a label that is about to be deleted */
+    if(s_flash_timer) {
+        lv_timer_t * old = s_flash_timer;
+        s_flash_timer = NULL;
+        lv_timer_delete(old);
+    }
+    /* and so does any transition the theme started on a button that is about
+       to go away: an animation outlives its object otherwise */
+    lv_anim_delete_all();
+    lv_kill_tree(g_ui.content);
     lv_obj_clean(g_ui.content);
     g_ui.n_live = 0;
     g_ui.n_tog = 0;
@@ -820,6 +843,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_set_style_radius(box, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(box, 0, LV_PART_MAIN);
         lv_obj_set_style_outline_width(box, 0, LV_PART_MAIN);
+        lv_no_transition(box);
         g_ui.nav_box[i] = box;
 
         lv_obj_t * l = label(box, 0, 0, 0, g_page_names[i], &pda_font_mono_14,
@@ -841,6 +865,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
         lv_obj_set_style_outline_width(b, 0, LV_PART_MAIN);
+        lv_no_transition(b);
         g_ui.sub_btn[i] = b;
 
         lv_obj_t * l = label(b, 0, 0, 0, "", &pda_font_mono_10, PDA_TAB_TEXT);

@@ -3,6 +3,7 @@
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "ui/prefs.h"
+#include "ui/lvutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,7 +101,10 @@ static void add_row(const chat_msg_t * m)
     if(g_ui.rows >= ROW_MAX) {
         /* drop the oldest row and pull the rest up */
         lv_obj_t * child = lv_obj_get_child(g_ui.list, 0);
-        if(child) lv_obj_delete(child);
+        if(child) {
+            lv_kill_tree(child);
+            lv_obj_delete(child);
+        }
         for(int i = 0; i < g_ui.rows - 1; i++) g_ui.row_h[i] = g_ui.row_h[i + 1];
         g_ui.rows--;
         int yy = 0;
@@ -198,6 +202,7 @@ static void refresh(void)
     int count = chat_count();
     bool stick = at_bottom();
     if(count < g_ui.rendered) {     /* the log was trimmed: rebuild */
+        lv_kill_tree(g_ui.list);
         lv_obj_clean(g_ui.list);
         g_ui.rows = 0;
         g_ui.y = 0;
@@ -394,6 +399,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_border_width(send, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(send, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
     lv_obj_set_style_radius(send, 0, LV_PART_MAIN);
+    lv_no_transition(send);
     lv_obj_t * slbl = lv_label_create(send);
     lv_label_set_text(slbl, "SEND");
     lv_obj_set_style_text_font(slbl, &pda_font_mono_10, LV_PART_MAIN);

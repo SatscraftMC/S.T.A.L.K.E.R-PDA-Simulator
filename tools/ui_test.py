@@ -300,6 +300,16 @@ def test_hard_use():
         for y in (20, 50, 80, 110):
             click(40, DY + y)
         time.sleep(0.5)
+        # save a name and walk away from the page while it flashes
+        click(40, DY + 80)          # the User page
+        time.sleep(0.3)
+        click(450, NAME_Y)          # the name field
+        type_text("Satscraft")
+        click(605, NAME_Y)          # SAVE
+        click(40, DY + 50)          # and straight to another page
+        time.sleep(1.8)             # long enough for the flash to fire
+        click(40, DY + 80)          # and back again
+        time.sleep(0.4)
         ok = app_alive(p, logpath)
         shot("hard")
     finally:
