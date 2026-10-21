@@ -1,7 +1,9 @@
 #include "ui/pda_shell.h"
 #include "ui/palette.h"
+#include "ui/chat_ui.h"
 #include "assets/fonts/pda_fonts.h"
 #include "gps.h"
+#include "chat/chat.h"
 
 #include <string.h>
 #include <time.h>
@@ -56,7 +58,7 @@ typedef struct {
     int base;       /* zn at which 1 texel = 1 screen px (256 = master) */
 } map_layer_t;
 
-#define PDA_VERSION   "v0.0.1-pre-alpha"
+#define PDA_VERSION   "v0.0.2-pre-alpha"
 
 #define MAX_PACKS     8
 #define MAX_PACK_LV   8
@@ -244,12 +246,14 @@ static void redraw_header(void)
 static void restyle_labels(void)
 {
     shell_t * sh = &g_sh;
+    int unread = chat_unread();
 
-    for(int i = 0; i < TAB_COUNT; i++)
-        lv_obj_set_style_text_color(sh->tab_lbls[i],
-                                    lv_color_hex(i == sh->active_tab ? PDA_TAB_ACTIVE_TEXT
-                                                                     : PDA_TAB_TEXT),
-                                    LV_PART_MAIN);
+    for(int i = 0; i < TAB_COUNT; i++) {
+        uint32_t col = (i == sh->active_tab) ? PDA_TAB_ACTIVE_TEXT : PDA_TAB_TEXT;
+        /* the Messages tab carries the unread count */
+        if(i == 1 && unread > 0) col = PDA_MSG_ACCENT;
+        lv_obj_set_style_text_color(sh->tab_lbls[i], lv_color_hex(col), LV_PART_MAIN);
+    }
 
     for(int i = 1; i < SUB_COUNT; i++)
         lv_obj_set_style_text_color(sh->sub_lbls[i],
@@ -259,6 +263,19 @@ static void restyle_labels(void)
 
     lv_obj_set_style_text_color(sh->clock_lbl, lv_color_hex(PDA_CLOCK), LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->title_lbl, lv_color_hex(PDA_TITLE), LV_PART_MAIN);
+}
+
+/* the Messages tab shows how many messages came in while it was not open */
+static void update_unread(void)
+{
+    shell_t * sh = &g_sh;
+    if(sh->active_tab == 1) chat_reset_unread();     /* it is open: read them */
+    int unread = chat_unread();
+    char buf[32];
+    snprintf(buf, sizeof(buf), unread > 0 ? "Messages %d" : "Messages", unread);
+    if(strcmp(lv_label_get_text(sh->tab_lbls[1]), buf) != 0)
+        lv_label_set_text(sh->tab_lbls[1], buf);
+    restyle_labels();
 }
 
 static void update_title(shell_t * sh)
@@ -303,6 +320,7 @@ static void update_gps(lv_timer_t * timer)
                  sh->gps.valid ? "Nothing to tune yet." : "Waiting for a GPS fix...");
         lv_label_set_text(sh->status_lbl, buf);
     }
+    update_unread();
 }
 
 /* ---------- view switching ---------- */
@@ -329,6 +347,7 @@ static void set_tab(shell_t * sh, int idx)
 {
     if(idx < 0 || idx >= TAB_COUNT) return;
     sh->active_tab = idx;
+    if(idx == 1) chat_reset_unread();     /* the Messages tab is open now */
     redraw_header();
     restyle_labels();
     update_title(sh);
@@ -1195,6 +1214,8 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     sh->lat_c = sh->gps.lat;
     sh->active_pack = -1;
 
+    chat_init();
+
     lv_obj_set_style_bg_color(parent, lv_color_hex(PDA_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(parent, &pda_font_mono_14, LV_PART_MAIN);
@@ -1227,8 +1248,10 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
         "Balance: 0 sats",
         "Nothing to tune yet."
     };
-    for(int i = 0; i < TAB_COUNT - 1; i++)
-        sh->panels[i] = build_panel(sh->view, titles[i], bodies[i]);
+    for(int i = 0; i < TAB_COUNT - 1; i++) {
+        if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
+        else sh->panels[i] = build_panel(sh->view, titles[i], bodies[i]);
+    }
 
     /* the last panel doubles as the status screen: version + GPS */
     sh->status_lbl = lv_label_create(sh->panels[TAB_COUNT - 2]);
@@ -1239,5 +1262,10 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     redraw_header();
     restyle_labels();
     show_view(sh);
+
+    /* test hook: start on a given tab (PDA_START_TAB) */
+    const char * start_tab = getenv("PDA_START_TAB");
+    if(start_tab && *start_tab) set_tab(sh, atoi(start_tab));
+
     return parent;
 }

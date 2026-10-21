@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.0.1-pre-alpha**
+**v0.0.2-pre-alpha**
 
 An open-source handheld communicator UI in the spirit of the STALKER PDA: a
 gripped, button-driven device with an offline map, radio/messages, contacts and
@@ -33,6 +33,10 @@ desktop environment.
   tiers as you zoom in.
 - **Pack-based map system**: every region is a self-contained folder, so adding
   a new map tile needs no code change (see below).
+- **One room, every carrier** (the Messages tab): what you type goes out on
+  every medium that is up - the local mesh, the FIPS mesh and the internet -
+  and everything that comes in shows up in the same log, tagged with the
+  carrier it arrived on.
 - STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
   live clock, gritty palette.
 - The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
@@ -40,6 +44,65 @@ desktop environment.
   drift without hardware). The *Other* panel shows the live GPS state.
 - **Mouse wheel zooms towards the cursor** (the world point under the pointer
   stays under the pointer); the +/- buttons zoom around the middle of the view.
+
+### The Messages tab - one room, three carriers
+
+```
++-------------------------------------------------------------+
+| SECTOR   mesh 2425 / mesh port 4600 / relay 1.2.3.4:7788  BIT FIPS NET |
++-------------------------------------------------------------+
+| 13:59  ROOK     FIPS  anyone got the drop coords?          |
+| 13:59  ME       NET   not yet, rain again                 |
++-------------------------------------------------------------+
+| [ type a message...                                ] [ SEND ] |
++-------------------------------------------------------------+
+```
+
+Everything rides the same envelope on all three carriers:
+
+```json
+{"v":1,"t":"msg","id":"7f2a91","from":"Satscraft","room":"SECTOR",
+ "text":"anyone got the drop coords?","ts":1730000000}
+```
+
+| carrier | what it is | how it is wired |
+|---|---|---|
+| **BIT** | the local mesh - no server, no account, whoever is in earshot is in the room | UDP broadcast on port 2425 (the port the bitchat mesh uses). A real bitchat node can be wired in through a bridge: `PDA_BITCHAT_SOCK=/tmp/pda-bitchat.sock` |
+| **FIPS** | the FIPS mesh (Free Internetworking Peering System) | the daemon's **native datagram API**: `listen`/`connect` over the api socket, one datagram per message, no framing |
+| **NET** | the internet | a relay (`tools/relay.py`), which can itself bridge to an ntfy topic |
+
+Try it:
+
+```bash
+# a relay, then two clients
+python3 tools/relay.py --port 7788
+PDA_RELAY_PORT=7788 ./build/pda          # the PDA
+python3 - <<'EOF'
+import socket, json, time
+s = socket.create_connection(("127.0.0.1", 7788))
+s.sendall((json.dumps({"v":1,"t":"msg","id":"x1","from":"ROOK",
+  "room":"SECTOR","text":"anyone got the drop coords",
+  "ts":int(time.time())})+"\n").encode())
+time.sleep(1)
+EOF
+```
+
+The mesh carrier needs no setup at all: start two PDAs on the same network
+and they hear each other.
+
+### Environment
+
+| variable | what it does |
+|---|---|
+| `PDA_NAME` | the name other devices see (default `STALKER`) |
+| `PDA_ROOM` | the room name (default `SECTOR`) |
+| `PDA_RELAY_HOST` / `PDA_RELAY_PORT` | where the NET relay is (default `127.0.0.1:7788`) |
+| `PDA_BITCHAT_SOCK` / `PDA_BITCHAT_HOST` / `PDA_BITCHAT_PORT` | a bitchat bridge to plug into the local mesh |
+| `PDA_BITCHAT_PORT` | the mesh port (default 2425) |
+| `PDA_FIPS_SOCK` / `PDA_FIPS_CTL` | the fips daemon's api and control sockets |
+| `PDA_FIPS_PORT` | the FSP port to talk on (default 4600) |
+| `PDA_START_TAB` | start on a given tab (1 = Messages) - a test hook |
+| `PDA_TEST_SEND` | say this on startup - a test hook |
 
 ### GPS on the Pi
 
@@ -130,14 +193,19 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | `tools/fetch_map.py` | build a map pack from Esri World Imagery tiles |
 | `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
 | `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
+| `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
+| `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
+| `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |
+| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |
 | `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
 | `tools/fetch_deps.sh` | fetch LVGL + reassemble the split map levels |
 
 ## Status
 
-Phase 3 (the map screen) is functional. Still to come: wallet/QR payments,
-camera, radio, real navigation stack, input abstraction (sim -> GPIO/evdev),
-and the Pi port (DRM/KMS + systemd boot-to-app).
+Phase 3 (the map screen) is functional and the Messages tab is a real group
+chat over three carriers. Still to come: wallet/QR payments, camera, radio,
+real navigation stack, input abstraction (sim -> GPIO/evdev), and the Pi port
+(DRM/KMS + systemd boot-to-app).
 
 ## License
 

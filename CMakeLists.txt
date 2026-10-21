@@ -23,6 +23,10 @@ add_executable(pda ${PDA_SOURCES})
 target_include_directories(pda PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(pda PRIVATE lvgl::lvgl Threads::Threads)
 
+# an undeclared function is assumed to return int - which silently truncates
+# a pointer (getenv without <stdlib.h> did exactly that)
+target_compile_options(pda PRIVATE -Werror=implicit-function-declaration)
+
 if(UNIX)
   target_link_libraries(pda PRIVATE m)
 endif()

@@ -39,4 +39,19 @@
 #define PDA_MAP_IMPORTANT       0xF39C12
 #define PDA_MAP_ME              0x3FA9F5
 
+/* the chat screen */
+#define PDA_CHAT_BG             0x191B16
+#define PDA_CHAT_STRIP          0x12130F
+#define PDA_CHAT_EDGE           0x35382F
+#define PDA_CHAT_INPUT          0x20221C
+#define PDA_MSG_TEXT            0x9B9D94
+#define PDA_MSG_TIME            0x55574E
+#define PDA_MSG_ME              0x4FA8D8
+#define PDA_MSG_THEM            0xC9A94E
+#define PDA_MSG_SYS             0x6C6E64
+#define PDA_MSG_ACCENT          0xC9A227
+#define PDA_CARRIER_UP          0x7C9E52
+#define PDA_CARRIER_DOWN        0x6B4A42
+#define PDA_CARRIER_WAIT        0x9A7C36
+
 #endif
