@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.6-alpha**
+**v0.2.8-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -170,6 +170,17 @@ The Bitchat page says so when no peer answers. Both devices need it: the
 one that only has to *send* works with the firewall closed, the one that has
 to *receive* does not - which is why the mesh used to work in one direction
 only.
+
+**What each carrier needs, in one table:**
+
+| carrier | what carries it | what has to be there |
+|---|---|---|
+| **BIT** | UDP on the LAN (port 2425) | the network itself - **the WiFi is the radio**. Radio off, no LAN, no mesh: the badge goes red `no link`. There is no Bluetooth in the simulator; a real bitchat node plugs in through the bridge |
+| **NET** | a TCP connection to a relay | a relay *process* on one machine: `python3 tools/relay.py` (it listens on `0.0.0.0:7788`), and `PDA_RELAY_HOST=<that machine's ip>` on the other. No relay running: the badge stays grey `no relay` |
+| **FIPS** | the `fips` daemon | the daemon on the machine (`/run/fips/api.sock`). Without it the badge is red `no daemon` |
+
+When a message could not go out at all, the log says which carrier is why:
+`no carrier up - kept locally (BIT no link, FIPS no daemon, NET no relay)`.
 
 ## The Other tab - settings, connections, extras
 

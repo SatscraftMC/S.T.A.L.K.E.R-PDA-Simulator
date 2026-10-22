@@ -326,12 +326,31 @@ bool chat_send(const char * text)
     make_id(id, sizeof(id));
 
     bool any = false;
+    char why[200] = "";       /* the carriers that did not take it, and why */
+
     for(int i = 0; i < s_n_tr; i++) {
         chat_transport_t * t = s_tr[i];
-        if(t->state != CHAT_CARRIER_ONLINE || !t->send) continue;
-        /* the carriers the user does not want are left out */
-        if(!chat_carrier_enabled(i)) continue;
-        if(t->send(t, text, id)) any = true;
+        if(!t) continue;
+
+        char one[64] = "";
+        if(!chat_carrier_enabled(i)) {
+            snprintf(one, sizeof(one), "%s off", t->tag);
+        }
+        else if(t->state != CHAT_CARRIER_ONLINE || !t->send) {
+            if(t->status[0]) snprintf(one, sizeof(one), "%s %s", t->tag, t->status);
+            else snprintf(one, sizeof(one), "%s down", t->tag);
+        }
+        else if(t->send(t, text, id)) {
+            any = true;
+        }
+        else {
+            snprintf(one, sizeof(one), "%s failed", t->tag);
+        }
+
+        if(one[0] && strlen(why) + strlen(one) + 3 < sizeof(why)) {
+            if(why[0]) strncat(why, ", ", sizeof(why) - strlen(why) - 1);
+            strncat(why, one, sizeof(why) - strlen(why) - 1);
+        }
     }
 
     chat_msg_t m;
@@ -347,7 +366,12 @@ bool chat_send(const char * text)
     remember(m.id, m.sender, m.text);   /* so our own echo is not shown twice */
 
     if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] sent: %s\n", text);
-    if(!any) chat_system("no carrier up - message kept locally");
+    if(!any) {
+        char line[CHAT_TEXT_MAX + 64];
+        snprintf(line, sizeof(line), "no carrier up - kept locally (%s)",
+                 why[0] ? why : "nothing enabled");
+        chat_system(line);
+    }
     return true;
 }
 

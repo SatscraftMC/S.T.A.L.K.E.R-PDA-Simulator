@@ -46,6 +46,21 @@ static void set_nonblock(int fd)
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* why the relay could not be reached: "no relay" is a dead port on a live
+   network, "no link" is no network to speak of at all */
+static const char * net_reason(int err)
+{
+    switch(err) {
+        case ECONNREFUSED: return "no relay";
+        case ENETUNREACH:
+        case EHOSTUNREACH:
+        case ENETDOWN:
+        case EADDRNOTAVAIL:
+            return "no link";
+        default: return "no relay";
+    }
+}
+
 static bool net_connect(chat_transport_t * t)
 {
     net_t * n = (net_t *)t->priv;
@@ -89,7 +104,7 @@ static bool net_connect(chat_transport_t * t)
         socklen_t elen = sizeof(err);
         if(pr <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
             close(fd);
-            snprintf(t->status, sizeof(t->status), "no relay");
+            snprintf(t->status, sizeof(t->status), "%s", net_reason(err));
             n->backoff = n->backoff ? n->backoff * 2 : 2;
             if(n->backoff > 30) n->backoff = 30;
             return false;

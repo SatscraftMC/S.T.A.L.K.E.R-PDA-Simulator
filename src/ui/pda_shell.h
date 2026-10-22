@@ -5,7 +5,7 @@
 
 /* which build this is - the app says it when it starts, so a stale process
    is easy to spot */
-#define PDA_VERSION   "v0.2.7-alpha"
+#define PDA_VERSION   "v0.2.8-alpha"
 
 lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group);
 

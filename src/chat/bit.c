@@ -82,6 +82,8 @@ typedef struct {
     uint32_t scan_host;     /* the address inside it */
     struct in_addr local[8];    /* our own addresses: the sweep skips them */
     int n_local;
+    bool have_link;             /* a network we could actually talk on */
+    time_t last_refresh;        /* when the interfaces were last looked at */
     time_t next_sweep;
     time_t next_ping;
     bool scan_off;
@@ -92,10 +94,14 @@ static chat_transport_t s_tr;
 
 /* the addresses a mesh message goes to: every interface's broadcast address,
    the limited broadcast, and the loopback (so two PDAs on the same machine
-   hear each other - the kernel does not hand a local broadcast back) */
+   hear each other - the kernel does not hand a local broadcast back).
+   It also says whether there is a network at all: a machine whose only
+   address is the loopback has no radio, and saying ONLINE anyway is how
+   "the mesh ate my message" gets reported. */
 static void collect_broadcasts(bit_t * b)
 {
     b->n_bcast = 0;
+    b->have_link = false;
     struct ifaddrs * ifa = NULL;
     if(getifaddrs(&ifa) == 0) {
         for(struct ifaddrs * p = ifa; p; p = p->ifa_next) {
@@ -104,11 +110,13 @@ static void collect_broadcasts(bit_t * b)
             struct sockaddr_in * sa = (struct sockaddr_in *)p->ifa_addr;
             struct sockaddr_in * br = (struct sockaddr_in *)p->ifa_broadaddr;
             if(!br) continue;
+            if(p->ifa_flags & IFF_LOOPBACK) continue;
             bool have = false;
             for(int i = 0; i < b->n_bcast; i++)
                 if(b->bcast[i].s_addr == br->sin_addr.s_addr) have = true;
             if(!have && b->n_bcast < 6) b->bcast[b->n_bcast++] = br->sin_addr;
             (void)sa;
+            b->have_link = true;    /* an address on a real interface */
         }
         freeifaddrs(ifa);
     }
@@ -371,6 +379,8 @@ static bool bridge_connect(bit_t * b)
 static bool bit_connect(chat_transport_t * t)
 {
     bit_t * b = (bit_t *)t->priv;
+    time_t now = time(NULL);
+
     if(b->udp < 0) {
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         if(fd < 0) {
@@ -394,22 +404,38 @@ static bool bit_connect(chat_transport_t * t)
         b->udp = fd;
         collect_broadcasts(b);
         collect_scan(b);
+        b->last_refresh = now;
         b->next_sweep = 0;      /* the first sweep goes out at once */
         b->next_ping = 0;
     }
+    else if(!b->last_refresh || now - b->last_refresh >= 2) {
+        /* the interfaces may have come or gone while we were not up */
+        collect_broadcasts(b);
+        collect_scan(b);
+        b->last_refresh = now;
+    }
 
-    t->state = CHAT_CARRIER_ONLINE;
-    snprintf(t->status, sizeof(t->status), "mesh %d", b->port);
+    chat_carrier_state_t was = t->state;
+    if(b->have_link) {
+        t->state = CHAT_CARRIER_ONLINE;
+        snprintf(t->status, sizeof(t->status), "mesh %d", b->port);
+    }
+    else {
+        /* no interface with an address: there is nobody to talk to */
+        t->state = CHAT_CARRIER_OFFLINE;
+        snprintf(t->status, sizeof(t->status), "no link");
+    }
+    if(getenv("PDA_DEBUG") && t->state != was)
+        fprintf(stderr, "[chat] bit: %s\n", t->status);
 
     if(b->bridge_want && b->bridge.fd < 0) {
-        time_t now = time(NULL);
         if(!b->last_try || now - b->last_try > b->backoff) {
             bridge_connect(b);
             if(b->backoff == 0) b->backoff = 2;
             else if(b->backoff < 30) b->backoff *= 2;
         }
     }
-    return true;
+    return b->have_link;
 }
 
 static void bit_disconnect(chat_transport_t * t)
@@ -530,6 +556,19 @@ static int bit_poll(chat_transport_t * t)
             }
             deliver_line(t, line);
             got++;
+        }
+    }
+
+    /* the link comes and goes (wifi off, sleep): keep an eye on it, so the
+       badge says so and the messages are not posted into the void */
+    if(now - b->last_refresh >= 5) {
+        b->last_refresh = now;
+        collect_broadcasts(b);
+        collect_scan(b);
+        if(!b->have_link) {
+            t->state = CHAT_CARRIER_OFFLINE;
+            snprintf(t->status, sizeof(t->status), "no link");
+            if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] bit: no link\n");
         }
     }
     return got;
