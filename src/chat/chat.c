@@ -343,7 +343,7 @@ void chat_poll(void)
 
 /* ---------- the peers of the mesh ---------- */
 
-void chat_note_peer(const char * addr, const char * name)
+void chat_note_peer(const char * addr, int port, const char * name)
 {
     if(!addr || !*addr) return;
     time_t now = time(NULL);
@@ -352,6 +352,7 @@ void chat_note_peer(const char * addr, const char * name)
     for(int i = 0; i < s_n_peers; i++) {
         if(strcmp(s_peers[i].addr, addr) != 0) continue;
         s_peers[i].last = now;
+        if(port > 0) s_peers[i].port = port;
         if(name && *name) snprintf(s_peers[i].name, sizeof(s_peers[i].name), "%s", name);
         return;
     }
@@ -368,6 +369,7 @@ void chat_note_peer(const char * addr, const char * name)
     snprintf(s_peers[s_n_peers].addr, sizeof(s_peers[s_n_peers].addr), "%s", addr);
     snprintf(s_peers[s_n_peers].name, sizeof(s_peers[s_n_peers].name), "%s",
              (name && *name) ? name : "?");
+    s_peers[s_n_peers].port = port;
     s_peers[s_n_peers].last = now;
     s_n_peers++;
 }

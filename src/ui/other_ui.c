@@ -131,6 +131,7 @@ typedef struct {
     /* the mesh map on the Bitchat page */
     lv_obj_t * mesh_canvas;
     uint32_t mesh_buf[MESH_W * MESH_H];
+    lv_obj_t * bit_hint;      /* the firewall hint, shown when nobody answers */
 
     lv_obj_t * name_ta;
     lv_obj_t * room_ta;
@@ -501,6 +502,7 @@ static void page_bitchat(void)
     snprintf(buf, sizeof(buf), "%s", getenv("PDA_BITCHAT_PORT") ? getenv("PDA_BITCHAT_PORT")
                                                                  : "2425");
     live_row(g_ui.content, "Mesh port", "bit_port", buf, PDA_MSG_TEXT);
+    live_row(g_ui.content, "Discovery", "bit_scan", "off", PDA_MSG_TEXT);
     live_row(g_ui.content, "Bridge", "bit_bridge",
              (sock && *sock) ? sock : ((host && *host) ? host : "not connected"),
              (sock || host) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
@@ -509,6 +511,16 @@ static void page_bitchat(void)
     section(g_ui.content, "LINK");
     live_row(g_ui.content, "State", "bit_state", "offline", PDA_CARRIER_DOWN);
     live_row(g_ui.content, "Peers heard", "bit_peers", "0", PDA_MSG_TEXT);
+
+    /* the mesh needs the port open: a firewall that drops what comes in
+       leaves the device deaf, and nobody can hear it either */
+    lv_obj_t * hint = label(g_ui.content, 0, 0, 300,
+                             "no peers? the firewall may hold port 2425\n"
+                             "sudo ufw allow 2425/udp",
+                             &pda_font_mono_10, PDA_MSG_SYS);
+    lv_obj_set_flex_grow(hint, 0);
+    lv_obj_set_height(hint, 26);
+    g_ui.bit_hint = hint;
 }
 
 static void page_fips(void)
@@ -934,6 +946,7 @@ static void build_content(void)
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
     g_ui.mesh_canvas = NULL;
+    g_ui.bit_hint = NULL;
 
     if(g_ui.page == PAGE_SETTINGS) page_settings(g_ui.sub);
     else if(g_ui.page == PAGE_CONNECTIONS) {
@@ -995,6 +1008,16 @@ void other_ui_refresh(void)
             char n[16];
             snprintf(n, sizeof(n), "%d", chat_peer_count());
             set_live(i, n, PDA_MSG_TEXT);
+            /* the hint is only worth the room when nobody answers */
+            if(g_ui.bit_hint) {
+                if(chat_peer_count() > 0) lv_obj_set_hidden(g_ui.bit_hint, true);
+                else lv_obj_set_hidden(g_ui.bit_hint, false);
+            }
+        }
+        else if(!strcmp(key, "bit_scan")) {
+            char scan[96] = "off";
+            bit_scan_text(scan, sizeof(scan));
+            set_live(i, scan, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "bit_state")) {
             const chat_transport_t * tr = NULL;

@@ -292,13 +292,21 @@ static void chat_tick(lv_timer_t * timer)
     chat_poll();
     refresh();
 
-    /* test hook: say something on startup (PDA_TEST_SEND) */
+    /* test hook: say something on startup (PDA_TEST_SEND). PDA_TEST_SEND_IN
+       holds the message back for that many seconds - the mesh test needs
+       the device to have found its peer first. */
     static bool sent = false;
     if(!sent) {
         const char * t = getenv("PDA_TEST_SEND");
         if(t && *t) {
-            sent = true;
-            chat_send(t);
+            static time_t t0 = 0;
+            if(!t0) t0 = time(NULL);
+            const char * d = getenv("PDA_TEST_SEND_IN");
+            int wait = d && *d ? atoi(d) : 0;
+            if(wait <= 0 || time(NULL) - t0 >= wait) {
+                sent = true;
+                chat_send(t);
+            }
         }
     }
 }

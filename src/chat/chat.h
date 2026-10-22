@@ -103,10 +103,17 @@ int chat_fips_peer_count(void);
 typedef struct {
     char name[CHAT_NAME_MAX];
     char addr[40];
+    int  port;              /* the port the peer was heard on */
     time_t last;
 } chat_peer_t;
 
-void chat_note_peer(const char * addr, const char * name);
+/* a device the mesh has heard from. The port matters: the mesh talks to a
+   peer directly on that port, not only through the broadcast. */
+void chat_note_peer(const char * addr, int port, const char * name);
+
+/* the subnets the local mesh sweeps looking for the other devices
+   ("192.168.1.0/24", or "off") */
+const char * bit_scan_text(char * out, size_t outn);
 int chat_peer_count(void);
 const chat_peer_t * chat_peer_at(int i);
 

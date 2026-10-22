@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.4-alpha**
+**v0.2.5-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -59,6 +59,16 @@ on a desktop environment.
   the nodes and a line to each of them - the way the bitchat app draws it.
   The peers are the ones the local mesh has heard from; a device that has
   been quiet for five minutes is gone.
+- **The local mesh does not live on the broadcast alone**: the device walks
+  the local subnet looking for the other ones (a small "hi" every minute),
+  remembers where they live and sends the messages **straight to them**, next
+  to the broadcast. That is what makes the mesh work when the broadcast is
+  the one packet that gets dropped - by a firewall, by an access point that
+  does not forward broadcasts, by a router that keeps the wired and the
+  wireless side apart. *Discovery* on the Bitchat page shows the subnet that
+  is being walked.
+- **The firewall**: the mesh needs UDP 2425 open (`sudo ufw allow 2425/udp`).
+  The Bitchat page says so when nobody answers.
 - **The Other tab** is the device's control panel: a column of sections
   (Settings, Connections, User, Extras), a column of sub-tabs, and the page
   below that. *Connections* says what is connected (green, grey while it
@@ -112,6 +122,38 @@ EOF
 The mesh carrier needs no setup at all: start two PDAs on the same network
 and they hear each other.
 
+### How the local mesh finds the other devices
+
+The carrier sends on **UDP 2425** (the port the bitchat mesh uses), on one
+channel (`#mesh` by default). It does it two ways, because the broadcast is
+the first packet that gets dropped:
+
+1. **the broadcast** - everyone in earshot hears it;
+2. **straight to the peers it knows** - the devices it has heard from, on
+   their own address and port.
+
+The peers are found by walking the local subnet: every minute a small
+`{"t":"hi"}` goes to the addresses of the network the device is on, and the
+device that answers says who it is and which port it listens on
+(`{"t":"hi-ack"}`). From then on the two talk to each other directly, and
+every ten seconds a "hi" keeps the flow open in the firewalls of both
+machines.
+
+The sweep can be turned off (`PDA_BIT_SCAN=off`) or pointed at other
+networks (`PDA_BIT_SCAN=10.0.0.0/24,192.168.1.0/24`); the *Discovery* row
+on the Bitchat page shows what is being walked.
+
+**The firewall has to let the port in**, otherwise the device is deaf:
+
+```bash
+sudo ufw allow 2425/udp
+```
+
+The Bitchat page says so when no peer answers. Both devices need it: the
+one that only has to *send* works with the firewall closed, the one that has
+to *receive* does not - which is why the mesh used to work in one direction
+only.
+
 ## The Other tab - settings, connections, user
 
 ![the other tab](docs/screenshots/other-connections.png)
@@ -157,12 +199,14 @@ The settings are remembered in `~/.config/pda/prefs.conf` (override with
 | `PDA_RELAY_HOST` / `PDA_RELAY_PORT` | where the NET relay is (default `127.0.0.1:7788`) |
 | `PDA_BITCHAT_SOCK` / `PDA_BITCHAT_HOST` / `PDA_BITCHAT_PORT` | a bitchat bridge to plug into the local mesh |
 | `PDA_BITCHAT_PORT` | the mesh port (default 2425) |
+| `PDA_BIT_SCAN` | the subnets the local sweep walks (`off` to switch it off, or `10.0.0.0/24,192.168.1.0/24`) |
 | `PDA_MESH_CHANNEL` | the channel the local mesh talks on (default `mesh`) |
 | `PDA_FIPS_SOCK` / `PDA_FIPS_CTL` | the fips daemon's api and control sockets |
 | `PDA_FIPS_PORT` | the FSP port to talk on (default 4600) |
 | `PDA_START_TAB` | start on a given tab (1 = Messages, 6 = Other) - a test hook |
 | `PDA_OTHER_PAGE` / `PDA_OTHER_SUB` | open the Other tab on a given page - a test hook |
 | `PDA_TEST_SEND` | say this on startup - a test hook |
+| `PDA_TEST_SEND_IN` | say it this many seconds after the start - a test hook |
 
 ### GPS on the Pi
 
@@ -288,7 +332,8 @@ The data is © OpenStreetMap contributors (ODbL), via BTC Map.
 | `tools/fetch_btc.py` | build a traders pack (the bitcoin merchants) from BTC Map |
 | `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
 | `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
-| `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
+| `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh, the local sweep that finds the peers and the FIPS native API |
+| `tools/mesh_netns_test.sh` | the local mesh over a **real** link (a veth pair and a network namespace): the sweep finds the other device, the message goes straight to it, and the firewall decides what comes in. Needs root |
 | `tools/ui_test.py` | bug hunt for the UI: every tab and every page, the name and the room being saved, a broken settings file, a name that would break the wire format, the mesh channel, the recenter button, and driving the app hard |
 | `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
 | `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |

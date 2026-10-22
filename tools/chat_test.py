@@ -192,6 +192,9 @@ def test_bit():
     #                 127.0.0.1 lands on the peer
     #   mesh -> app : the peer binds 127.0.0.2 and sends to 127.0.0.1, which
     #                 only the app's wildcard socket matches
+    #
+    # The sweep of the local subnet is off here: it has its own test below
+    # and it has no business walking the real network.
 
     # --- app -> mesh ---
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -203,6 +206,7 @@ def test_bit():
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_NAME": "Satscraft",
+        "PDA_BIT_SCAN": "off",
         "PDA_TEST_SEND": "anyone on the mesh",
     })
     try:
@@ -226,6 +230,7 @@ def test_bit():
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_NAME": "WUMGUB",
+        "PDA_BIT_SCAN": "off",
     })
     try:
         time.sleep(2.0)
@@ -237,6 +242,72 @@ def test_bit():
         data = wait_for_log(log_path, r"\[chat\] recv via BIT from ROOK", 8)
         note("recv via BIT from ROOK" in data,
              "the app heard a message on the mesh")
+    finally:
+        stop_app(app, log_h)
+        peer.close()
+
+
+def test_bit_discovery():
+    print("BIT - finding the peer and talking to it directly", flush=True)
+    # The broadcast is the one packet a firewall drops first, so the mesh
+    # also walks the local subnet looking for the other devices and then
+    # talks to them directly.
+    #
+    # The peer sits on 127.0.0.2 - an address that is in none of the app's
+    # broadcast addresses (127.0.0.1, the subnet broadcast, the limited
+    # broadcast). So the only way the message can reach the peer is the
+    # direct way, to the address the app learned from the sweep.
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    peer.bind(("127.0.0.2", 2425))
+    peer.settimeout(3.0)
+    app, log_h, log_path = start_app("c2", {
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_NAME": "Satscraft",
+        "PDA_BIT_SCAN": "127.0.0.0/30",
+        "PDA_TEST_SEND": "anyone on the mesh",
+        "PDA_TEST_SEND_IN": "6",
+    })
+    try:
+        # the sweep reaches the peer, the peer answers
+        answered = False
+        end = time.time() + 12
+        while time.time() < end and not answered:
+            try:
+                data, addr = peer.recvfrom(4096)
+            except socket.timeout:
+                continue
+            try:
+                m = json.loads(data.decode("utf-8", "replace").strip())
+            except json.JSONDecodeError:
+                continue
+            if m.get("t") != "hi":
+                continue
+            peer.sendto(json.dumps({"v": 1, "t": "hi-ack", "from": "ROOK",
+                                    "port": 2425,
+                                    "ts": int(time.time())}).encode(), addr)
+            answered = True
+        note(answered, "the sweep reached the peer on the local subnet")
+
+        # the app must have taken the peer for a node of the mesh
+        data = wait_for_log(log_path, r"bit: peer ROOK at 127\.0\.0\.2", 8)
+        note("peer ROOK at 127.0.0.2" in data,
+             "the app knows the peer and where it lives")
+
+        # and the message must reach the peer directly
+        heard = b""
+        end = time.time() + 12
+        while time.time() < end:
+            try:
+                heard = peer.recv(4096)
+            except socket.timeout:
+                continue
+            if b"anyone on the mesh" in heard:
+                break
+        note(b"anyone on the mesh" in heard,
+             "the app's message went straight to the peer it found")
     finally:
         stop_app(app, log_h)
         peer.close()
@@ -291,6 +362,8 @@ def main():
     test_net(free_port())
     print()
     test_bit()
+    print()
+    test_bit_discovery()
     print()
     test_fips()
 
