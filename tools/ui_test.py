@@ -574,7 +574,7 @@ def test_map_layers():
         time.sleep(3.0)
 
         COLOURS = {"area": (255, 255, 255),        # the rings
-                   "trader": (131, 165, 180),     # the bag of coins (BTC Map)
+                   "trader": (40, 168, 200),      # the bag of coins (BTC Map)
                    "stash": (255, 211, 42),       # the yellow squares
                    "waypoint": (243, 156, 18)}    # the orange rings
         LAYER_X = {"trader": 163 + 148, "stash": 163 + 296, "waypoint": 163 + 444}
@@ -673,6 +673,22 @@ def test_waypoints():
         red2 = count(shot("wp_gone"), "red")
         note(red2 <= red0 + 20,
              f"right clicking it again takes it away ({red1} -> {red2})")
+
+        # the Waypoints layer switches the route on and off
+        right_click(300, 200)
+        on = count(shot("wp_layer_on"), "red")
+        click_once(163 + 3 * 148 + 6, 42)     # the Waypoints button
+        off = count(shot("wp_layer_off"), "red")
+        note(on > 40 and off <= 20,
+             f"the Waypoints layer switches the route off ({on} -> {off})")
+        click_once(163 + 3 * 148 + 6, 42)     # and on again
+        back = count(shot("wp_layer_back"), "red")
+        note(back > 40, f"and on again ({back})")
+
+        # the button that takes the whole route away
+        click_once(8 + 50, 89 + 8)
+        cleared = count(shot("wp_cleared"), "red")
+        note(cleared <= 20, f"CLEAR takes the whole route away ({back} -> {cleared})")
     finally:
         stop(p, f)
 

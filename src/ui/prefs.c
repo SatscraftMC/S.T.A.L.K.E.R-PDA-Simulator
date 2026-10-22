@@ -8,7 +8,7 @@
 
 typedef struct {
     char key[32];
-    char value[128];
+    char value[512];      /* the waypoints are a long one */
     bool used;
 } pref_t;
 
@@ -79,7 +79,7 @@ void prefs_load(void)
         s_loaded = true;
         return;
     }
-    char line[256];
+    char line[1024];
     while(fgets(line, sizeof(line), f)) {
         char * eq = strchr(line, '=');
         if(!eq) continue;

@@ -46,7 +46,7 @@
 #define FRAME_X       6
 #define FRAME_Y       32
 #define FRAME_W       788
-#define FRAME_H       396
+#define FRAME_H       407
 #define BACK_W        800
 #define BACK_H        452
 

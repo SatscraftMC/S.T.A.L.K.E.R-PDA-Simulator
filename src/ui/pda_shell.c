@@ -6,6 +6,7 @@
 #include "ui/i18n.h"
 #include "ui/format.h"
 #include "ui/grit.h"
+#include "ui/lvutil.h"
 #include "assets/fonts/pda_fonts.h"
 #include "gps.h"
 #include "chat/chat.h"
@@ -24,7 +25,11 @@
 
 #define TAB_COUNT   7
 #define HEADER_W    800
-#define HEADER_H    58
+/* the map tab's header: the tab row and the strip of layers under it. It
+   is 11px taller than the tab row alone, because that is where the map
+   used to start (the default theme puts an 11px gap between the rows of a
+   flex layout - the gap is gone now, see show_view). */
+#define HEADER_H    69
 /* the header is only as tall as it has to be: the map tab has the layer
    strip under the tabs, the other tabs have nothing there */
 #define HEADER_H_TABS 34
@@ -138,6 +143,7 @@ typedef struct {
     double wp_lon[MAX_WAYPOINTS];
     double wp_lat[MAX_WAYPOINTS];
     int wp_count;
+    lv_obj_t * wp_clear_btn;       /* takes the whole route away */
     lv_timer_t * gps_timer;
     map_pack_t packs[MAX_PACKS];
     int n_packs;
@@ -255,6 +261,8 @@ static void draw_parallelogram(int ox, int oy, int w, int h, int slant,
 
 static void apply_layers(shell_t * sh);   /* the markers of a layer */
 static void route_reached(shell_t * sh);  /* a waypoint that is reached goes away */
+static void waypoints_save(shell_t * sh); /* the waypoints in the settings file */
+static void waypoints_load(shell_t * sh); /* and back again */
 
 static void redraw_header(void)
 {
@@ -1069,15 +1077,17 @@ static void draw_poi_layer(shell_t * sh, int zn)
 
 /* ---------- the route (the user's own waypoints) ---------- */
 
-/* a line on the map, two pixels wide so it reads over the imagery */
+/* a line on the map, four pixels wide so it reads over the imagery */
 static void draw_line(shell_t * sh, int x0, int y0, int x1, int y1, uint16_t col)
 {
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
     for(int guard = 0; guard < 4096; guard++) {
-        view_px(sh, x0, y0, col);
-        view_px(sh, x0, y0 + 1, col);
+        for(int k = 0; k < 4; k++) {
+            view_px(sh, x0, y0 + k, col);
+            view_px(sh, x0 + 1, y0 + k, col);
+        }
         if(x0 == x1 && y0 == y1) break;
         int e2 = 2 * err;
         if(e2 >= dy) { err += dy; x0 += sx; }
@@ -1118,12 +1128,14 @@ static void geo_to_screen(shell_t * sh, int zn, double lon, double lat, int * x,
 }
 
 /* the route: the player, then the waypoints in the order they were put
-   down, each with a line to the one before it */
+   down, each with a line to the one before it. The Waypoints layer switches
+   the whole route on and off. */
 static void draw_route(shell_t * sh, int zn)
 {
     if(sh->wp_count <= 0) return;
+    if(!sh->sub_on[4]) return;          /* the Waypoints layer is off */
 
-    uint16_t line_col = rgb565_of(PDA_MSG_ACCENT);
+    uint16_t line_col = rgb565_of(PDA_ROUTE);
     uint16_t pin_col = rgb565_of(PDA_MAP_WAYPOINT);
 
     int px, py;
@@ -1140,6 +1152,42 @@ static void draw_route(shell_t * sh, int zn)
         geo_to_screen(sh, zn, sh->wp_lon[i], sh->wp_lat[i], &wx, &wy);
         draw_waypoint_pin(sh, wx, wy, pin_col);
     }
+}
+
+/* the waypoints are remembered: they are in the settings file */
+static void waypoints_save(shell_t * sh)
+{
+    char buf[512];
+    size_t o = 0;
+    for(int i = 0; i < sh->wp_count && o + 32 < sizeof(buf); i++) {
+        int n = snprintf(buf + o, sizeof(buf) - o, "%s%.6f,%.6f", i ? ";" : "",
+                         sh->wp_lon[i], sh->wp_lat[i]);
+        if(n < 0) break;
+        o += n;
+    }
+    buf[o] = 0;
+    prefs_set_str("waypoints", buf);
+}
+
+static void waypoints_load(shell_t * sh)
+{
+    const char * s = prefs_str("waypoints", "");
+    sh->wp_count = 0;
+    while(*s && sh->wp_count < MAX_WAYPOINTS) {
+        char * end = NULL;
+        double lon = strtod(s, &end);
+        if(end == s || *end != ',') break;
+        s = end + 1;
+        double lat = strtod(s, &end);
+        if(end == s) break;
+        s = end;
+        if(*s == ';') s++;
+        sh->wp_lon[sh->wp_count] = lon;
+        sh->wp_lat[sh->wp_count] = lat;
+        sh->wp_count++;
+    }
+    /* a route that is there has to be seen */
+    if(sh->wp_count > 0) sh->sub_on[4] = true;
 }
 
 /* the distance between two places, in metres */
@@ -1166,6 +1214,8 @@ static void route_reached(shell_t * sh)
         sh->wp_lat[j] = sh->wp_lat[j + 1];
     }
     sh->wp_count--;
+    waypoints_save(sh);
+    if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, sh->wp_count == 0);
 }
 
 /* ---------- rendering ---------- */
@@ -1446,6 +1496,8 @@ void pda_shell_right_click(int x, int y)
             sh->wp_lat[j] = sh->wp_lat[j + 1];
         }
         sh->wp_count--;
+        waypoints_save(sh);
+        if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, sh->wp_count == 0);
         map_update(sh);
         return;
     }
@@ -1455,6 +1507,25 @@ void pda_shell_right_click(int x, int y)
     sh->wp_lon[sh->wp_count] = geo_lon_from_w(wc + (ax - 400) / zscale);
     sh->wp_lat[sh->wp_count] = geo_lat_from_w(wct + (ay - 205) / zscale);
     sh->wp_count++;
+    /* the waypoints have to be seen, so their layer goes on */
+    if(!sh->sub_on[4]) {
+        sh->sub_on[4] = true;
+        redraw_header();
+        restyle_labels();
+    }
+    waypoints_save(sh);
+    if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, false);
+    map_update(sh);
+}
+
+/* the button that takes the whole route away */
+static void on_clear_waypoints(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    shell_t * sh = &g_sh;
+    sh->wp_count = 0;
+    waypoints_save(sh);
+    if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, true);
     map_update(sh);
 }
 
@@ -1691,6 +1762,27 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_style_text_font(sh->pack_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->pack_lbl, lv_color_hex(PDA_SUB_DOT_OFF), LV_PART_MAIN);
 
+    /* the button that takes the whole route away */
+    lv_obj_t * clear = lv_button_create(overlay);
+    lv_obj_set_pos(clear, 8, 20);
+    lv_obj_set_size(clear, 104, 17);
+    lv_obj_set_style_bg_color(clear, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(clear, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(clear, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(clear, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_radius(clear, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(clear, 0, LV_PART_MAIN);
+    lv_no_transition(clear);
+    lv_obj_t * clear_lbl = lv_label_create(clear);
+    lv_label_set_text(clear_lbl, "CLEAR WAYPOINTS");
+    lv_obj_set_style_text_font(clear_lbl, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(clear_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_center(clear_lbl);
+    lv_obj_add_event_cb(clear, on_clear_waypoints, LV_EVENT_CLICKED, NULL);
+    /* the button is only there when there is a route to take away */
+    lv_obj_set_hidden(clear, sh->wp_count == 0);
+    sh->wp_clear_btn = clear;
+
     /* the card of a merchant: it opens when one is tapped */
     lv_obj_t * card = lv_obj_create(overlay);
     lv_obj_set_pos(card, 8, MAP_VIEW_H - 62);
@@ -1774,6 +1866,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
 
     prefs_init();      /* the saved settings, before anything reads them */
     chat_init();
+    waypoints_load(sh);   /* the route the user planned last time */
 
     /* the settings that change how everything looks and reads */
     pda_theme_load();
@@ -1787,6 +1880,9 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(parent, &pda_font_mono_14, LV_PART_MAIN);
     lv_obj_set_style_pad_all(parent, 0, LV_PART_MAIN);
+    /* the default theme leaves an 11px gap between the rows of a flex
+       layout - the panel has to start right under the tab bar */
+    lv_obj_set_style_pad_row(parent, 0, LV_PART_MAIN);
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(parent, LV_DIR_NONE);

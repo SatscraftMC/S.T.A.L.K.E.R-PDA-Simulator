@@ -51,7 +51,7 @@
 #define FRAME_X      6
 #define FRAME_Y      32
 #define FRAME_W      788
-#define FRAME_H      396
+#define FRAME_H      407
 #define COL_X        14           /* the first column, inside the frame */
 #define RULE1_X      182
 #define SUB_X        190
@@ -59,7 +59,7 @@
 #define PAGE_X       306
 #define PAGE_Y       38
 #define PAGE_W       480
-#define PAGE_H       384
+#define PAGE_H       395
 #define ROW_H        18
 #define FIELD_W      220
 #define FIELD_H      17
