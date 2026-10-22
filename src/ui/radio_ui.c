@@ -13,31 +13,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-/* The Radio tab: a simple MP3 player styled like the STALKER PDA guide look.
+/* The Radio tab: a simple MP3 player styled like the STALKER music player.
  *
  *   +-------------------------------------------------------------+
  *   |                      Music Player                           |
  *   +-------------------------------------------------------------+
  *   |  Shuffle Off             04:18            Loop Off          |
- *   |  Playlist: OST                                        ...   |
+ *   |  Playlist: OST                                           ...|
  *   |  Playing: cheeki breeki but a bit classy                    |
  *   +-------------------------------------------------------------+
- *   | [menu] [shuffle] [loop] [ -vol ] [ +vol ] [ prev ] [stop] [next] |
+ *   | [≡] [↻] [↺] [−] [+] [◄◄] [■] [▶] [►►]                        |
  *   +-------------------------------------------------------------+
  *
  * Plays via gst-launch-1.0 (fork/exec + kill). Directory remembered in
- * prefs (radio_dir). Styled with parallelogram buttons and gritty surface
- * like the Messages and Other tabs.
+ * prefs (radio_dir).
  */
 
 #define MAX_TRACKS   64
-#define ROW_H        20
-#define FRAME_X      6
-#define FRAME_Y      32
-#define FRAME_W      788
-#define FRAME_H      407
 #define PANEL_X      190
 #define PANEL_Y      50
 #define PANEL_W      400
@@ -54,15 +47,11 @@ typedef struct {
 typedef struct {
     lv_obj_t * root;
     lv_obj_t * panel;          /* central info panel */
-    lv_obj_t * status_lbl;
-    lv_obj_t * dir_lbl;
-    lv_obj_t * track_lbl;
-    lv_obj_t * time_lbl;
     lv_obj_t * shuffle_lbl;
+    lv_obj_t * time_lbl;
     lv_obj_t * loop_lbl;
     lv_obj_t * playlist_lbl;
     lv_obj_t * playing_lbl;
-    lv_obj_t * list;           /* track list (optional, below panel) */
     lv_obj_t * play_btn;
     lv_obj_t * stop_btn;
     lv_obj_t * next_btn;
@@ -207,41 +196,39 @@ static void refresh(void)
     /* clear old panel children */
     lv_obj_clean(g_radio.panel);
 
-    /* title strip */
-    lv_obj_t * title = lv_label_create(g_radio.panel);
-    lv_label_set_text(title, "Music Player");
-    lv_obj_set_pos(title, PANEL_W / 2 - 60, 2);
-    lv_obj_set_style_text_font(title, &pda_font_mono_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title, lv_color_hex(PDA_TITLE), LV_PART_MAIN);
-
-    /* info lines */
+    /* row 1: Shuffle Off  04:18  Loop Off */
     lv_obj_t * shuffle_lbl = lv_label_create(g_radio.panel);
     lv_label_set_text(shuffle_lbl, g_radio.shuffle ? "Shuffle On" : "Shuffle Off");
-    lv_obj_set_pos(shuffle_lbl, 8, 20);
+    lv_obj_set_pos(shuffle_lbl, 10, 12);
     lv_obj_set_style_text_font(shuffle_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(shuffle_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(shuffle_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
 
     lv_obj_t * time_lbl = lv_label_create(g_radio.panel);
     char tbuf[16];
-    snprintf(tbuf, sizeof(tbuf), "%02d:%02d", g_radio.cur_track >= 0 ? (g_radio.cur_track / 60) : 0,
-                                    g_radio.cur_track >= 0 ? (g_radio.cur_track % 60) : 0);
+    snprintf(tbuf, sizeof(tbuf), "%02d:%02d",
+             g_radio.playing ? (g_radio.cur_track / 60) : 0,
+             g_radio.playing ? (g_radio.cur_track % 60) : 0);
     lv_label_set_text(time_lbl, tbuf);
-    lv_obj_set_pos(time_lbl, PANEL_W / 2 - 20, 20);
+    lv_obj_set_pos(time_lbl, PANEL_W / 2 - 20, 12);
     lv_obj_set_style_text_font(time_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(time_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(time_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
 
     lv_obj_t * loop_lbl = lv_label_create(g_radio.panel);
     lv_label_set_text(loop_lbl, g_radio.loop ? "Loop On" : "Loop Off");
-    lv_obj_set_pos(loop_lbl, PANEL_W - 80, 20);
+    lv_obj_set_pos(loop_lbl, PANEL_W - 74, 12);
     lv_obj_set_style_text_font(loop_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(loop_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(loop_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
 
+    /* row 2: Playlist: OST */
     lv_obj_t * playlist_lbl = lv_label_create(g_radio.panel);
     lv_label_set_text(playlist_lbl, "Playlist: OST");
-    lv_obj_set_pos(playlist_lbl, 8, 34);
+    lv_obj_set_pos(playlist_lbl, 10, 30);
+    lv_obj_set_width(playlist_lbl, PANEL_W - 20);
+    lv_label_set_long_mode(playlist_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(playlist_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(playlist_lbl, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
 
+    /* row 3: Playing: ... */
     lv_obj_t * playing_lbl = lv_label_create(g_radio.panel);
     if(g_radio.playing && g_radio.n_tracks > 0) {
         char pl[256];
@@ -251,8 +238,8 @@ static void refresh(void)
     else {
         lv_label_set_text(playing_lbl, "Playing: -");
     }
-    lv_obj_set_pos(playing_lbl, 8, 48);
-    lv_obj_set_width(playing_lbl, PANEL_W - 16);
+    lv_obj_set_pos(playing_lbl, 10, 44);
+    lv_obj_set_width(playing_lbl, PANEL_W - 20);
     lv_label_set_long_mode(playing_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(playing_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(playing_lbl, g_radio.playing
@@ -316,7 +303,7 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollable(p, false);
     r->root = p;
 
-    /* central info panel (like the image: Music Player with shuffle/time/loop) */
+    /* central info panel (Music Player) */
     r->panel = lv_obj_create(p);
     lv_obj_set_pos(r->panel, PANEL_X, PANEL_Y);
     lv_obj_set_size(r->panel, PANEL_W, PANEL_H);
@@ -328,20 +315,24 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_pad_all(r->panel, 0, LV_PART_MAIN);
     lv_obj_set_clickable(r->panel, false);
 
+    /* title strip above the panel */
+    lv_obj_t * title = lv_label_create(p);
+    lv_label_set_text(title, "Music Player");
+    lv_obj_set_pos(title, PANEL_X + PANEL_W / 2 - 48, PANEL_Y - 24);
+    lv_obj_set_style_text_font(title, &pda_font_mono_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title, lv_color_hex(PDA_TITLE), LV_PART_MAIN);
+
     /* control row: slanted parallelogram buttons */
-    int btn_y = PANEL_Y + PANEL_H + 14;
+    int btn_y = PANEL_Y + PANEL_H + 16;
     int total_w = 9 * BTN_W + 8 * BTN_GAP;
     int start_x = (800 - total_w) / 2;
-
-    r->shuffle_lbl = NULL; /* handled in refresh via panel labels */
-    r->loop_lbl = NULL;
 
     /* buttons: menu, shuffle, loop, vol-, vol+, prev, stop, play, next */
     struct { lv_event_cb_t cb; const char * text; } btns[9] = {
         { NULL,            "≡"   },
-        { NULL,            "↷"   },
+        { NULL,            "↻"   },
         { NULL,            "↺"   },
-        { NULL,            "–"   },
+        { NULL,            "−"   },
         { NULL,            "+"   },
         { on_prev_click,   "◄◄"  },
         { on_stop_click,   "■"   },
@@ -353,8 +344,8 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         int x = start_x + i * (BTN_W + BTN_GAP);
         lv_obj_t * b = slanted_btn(p, x, btn_y, BTN_W, BTN_H,
                                    btns[i].cb, btns[i].text, group);
-        if(i == 4) r->stop_btn = b;
-        else if(i == 6) r->prev_btn = b;
+        if(i == 5) r->prev_btn = b;
+        else if(i == 6) r->stop_btn = b;
         else if(i == 7) r->play_btn = b;
         else if(i == 8) r->next_btn = b;
     }
@@ -380,13 +371,11 @@ void radio_ui_destroy(void)
     lv_kill_tree(r->root);
     r->root = NULL;
     r->panel = NULL;
-    r->status_lbl = NULL;
-    r->dir_lbl = NULL;
-    r->track_lbl = NULL;
+    r->shuffle_lbl = NULL;
     r->time_lbl = NULL;
+    r->loop_lbl = NULL;
     r->playlist_lbl = NULL;
     r->playing_lbl = NULL;
-    r->list = NULL;
     r->play_btn = NULL;
     r->stop_btn = NULL;
     r->next_btn = NULL;
