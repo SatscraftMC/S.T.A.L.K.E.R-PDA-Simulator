@@ -28,6 +28,9 @@
  *
  * Plays via gst-launch-1.0 (fork/exec + kill). Directory remembered in
  * prefs (radio_dir).
+ *
+ * The active elements (shuffle/loop/time/playing) are drawn in cyan, like
+ * Image 1, not in the theme accent colour.
  */
 
 #define MAX_TRACKS   64
@@ -38,6 +41,9 @@
 #define BTN_W        70
 #define BTN_H        28
 #define BTN_GAP      8
+
+/* the cyan used for the active text, like Image 1 */
+#define RADIO_CYAN   0x00B0D8
 
 typedef struct {
     char path[768];
@@ -201,7 +207,7 @@ static void refresh(void)
     lv_label_set_text(shuffle_lbl, g_radio.shuffle ? "Shuffle On" : "Shuffle Off");
     lv_obj_set_pos(shuffle_lbl, 10, 12);
     lv_obj_set_style_text_font(shuffle_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(shuffle_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(shuffle_lbl, lv_color_hex(RADIO_CYAN), LV_PART_MAIN);
 
     lv_obj_t * time_lbl = lv_label_create(g_radio.panel);
     char tbuf[16];
@@ -211,13 +217,13 @@ static void refresh(void)
     lv_label_set_text(time_lbl, tbuf);
     lv_obj_set_pos(time_lbl, PANEL_W / 2 - 20, 12);
     lv_obj_set_style_text_font(time_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(time_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(time_lbl, lv_color_hex(RADIO_CYAN), LV_PART_MAIN);
 
     lv_obj_t * loop_lbl = lv_label_create(g_radio.panel);
     lv_label_set_text(loop_lbl, g_radio.loop ? "Loop On" : "Loop Off");
     lv_obj_set_pos(loop_lbl, PANEL_W - 74, 12);
     lv_obj_set_style_text_font(loop_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(loop_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(loop_lbl, lv_color_hex(RADIO_CYAN), LV_PART_MAIN);
 
     /* row 2: Playlist: OST */
     lv_obj_t * playlist_lbl = lv_label_create(g_radio.panel);
@@ -243,7 +249,7 @@ static void refresh(void)
     lv_label_set_long_mode(playing_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(playing_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(playing_lbl, g_radio.playing
-        ? lv_color_hex(PDA_MSG_ACCENT) : lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+        ? lv_color_hex(RADIO_CYAN) : lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
 
     /* hairline at bottom of panel */
     grit_rule(g_radio.panel, 0, PANEL_H - 2, lv_pct(100), false, PDA_RULE);
@@ -298,7 +304,6 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_style_border_width(p, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(p, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_gap(p, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(p, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scrollable(p, false);
     r->root = p;
