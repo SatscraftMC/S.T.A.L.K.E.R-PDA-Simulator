@@ -97,6 +97,19 @@ void chat_set_room(const char * room);
 /* how many peers the fips daemon knows about */
 int chat_fips_peer_count(void);
 
+/* The devices the mesh has been heard from - the nodes of the mesh map.
+   A peer that has been quiet for a few minutes is gone. */
+#define CHAT_PEER_MAX 12
+typedef struct {
+    char name[CHAT_NAME_MAX];
+    char addr[40];
+    time_t last;
+} chat_peer_t;
+
+void chat_note_peer(const char * addr, const char * name);
+int chat_peer_count(void);
+const chat_peer_t * chat_peer_at(int i);
+
 /* Build the wire envelope for a message. */
 void chat_envelope(char * out, size_t outn, const char * id, const char * sender,
                    const char * text, long ts);

@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.3-alpha**
+**v0.2.4-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -54,6 +54,11 @@ on a desktop environment.
   every medium that is up - the local mesh, the FIPS mesh and the internet -
   and everything that comes in shows up in the same log, tagged with the
   carrier it arrived on.
+- **A map of the mesh** on *Other -> Connections -> Bitchat*: this device in
+  the middle and the devices it has heard around it, with their names under
+  the nodes and a line to each of them - the way the bitchat app draws it.
+  The peers are the ones the local mesh has heard from; a device that has
+  been quiet for five minutes is gone.
 - **The Other tab** is the device's control panel: a column of sections
   (Settings, Connections, User, Extras), a column of sub-tabs, and the page
   below that. *Connections* says what is connected (green, grey while it

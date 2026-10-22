@@ -742,6 +742,52 @@ def test_waypoints():
     finally:
         stop(p, f)
 
+def test_mesh_map():
+    print("14. the mesh map", flush=True)
+    import socket
+    import json
+    prefs = "/tmp/opencode/uitest/mesh_prefs.conf"
+    if os.path.exists(prefs):
+        os.unlink(prefs)
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1",
+                            "PDA_OTHER_SUB": "1", "PDA_PREFS": prefs}, "mesh")
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        time.sleep(3.0)
+
+        def names(path):
+            """the pixels of the text colour in the mesh map: the names of
+               the peers are written under their nodes"""
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            n = 0
+            for y in range(52 + 32, 302 + 32):
+                for x in range(315, 755):
+                    r, g, b = px[x, y]
+                    if abs(r - 152) < 12 and abs(g - 156) < 12 and abs(b - 144) < 12:
+                        n += 1
+            return n
+
+        before = names(shot("mesh_before"))
+
+        # a device on the local mesh says something: it is a node of the map
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        peer.bind(("127.0.0.2", 2425))
+        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "m1", "from": "ROOK",
+                                 "room": "SECTOR", "text": "anyone there",
+                                 "ts": int(time.time())}) + "\n").encode(),
+                    ("127.0.0.1", 2425))
+        time.sleep(1.5)
+        after = names(shot("mesh_after"))
+        note(after > before + 20,
+             f"the peer shows up as a node ({before} -> {after} pixels)")
+    finally:
+        peer.close()
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -756,6 +802,7 @@ TESTS = {
     "caret": test_caret,
     "layers": test_map_layers,
     "waypoints": test_waypoints,
+    "mesh": test_mesh_map,
 }
 
 def main():

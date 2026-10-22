@@ -25,6 +25,10 @@ static char s_id[CHAT_NAME_MAX] = "STALKER";
 static char s_room[CHAT_ROOM_MAX] = "SECTOR";
 static char s_chan[CHAT_ROOM_MAX] = "mesh";
 
+/* the devices the mesh has been heard from: the nodes of the mesh map */
+static chat_peer_t s_peers[CHAT_PEER_MAX];
+static int s_n_peers = 0;
+
 /* recently seen ids, for de-duplicating the same message arriving on two
    carriers at once (a relay that bridges, for instance) */
 #define SEEN_MAX 32
@@ -335,4 +339,56 @@ void chat_poll(void)
         }
         if(t->state == CHAT_CARRIER_ONLINE && t->poll) t->poll(t);
     }
+}
+
+/* ---------- the peers of the mesh ---------- */
+
+void chat_note_peer(const char * addr, const char * name)
+{
+    if(!addr || !*addr) return;
+    time_t now = time(NULL);
+
+    /* the same device again */
+    for(int i = 0; i < s_n_peers; i++) {
+        if(strcmp(s_peers[i].addr, addr) != 0) continue;
+        s_peers[i].last = now;
+        if(name && *name) snprintf(s_peers[i].name, sizeof(s_peers[i].name), "%s", name);
+        return;
+    }
+
+    /* a new one: the quietest goes */
+    if(s_n_peers >= CHAT_PEER_MAX) {
+        int oldest = 0;
+        for(int i = 1; i < s_n_peers; i++)
+            if(s_peers[i].last < s_peers[oldest].last) oldest = i;
+        for(int j = oldest; j < s_n_peers - 1; j++) s_peers[j] = s_peers[j + 1];
+        s_n_peers--;
+    }
+
+    snprintf(s_peers[s_n_peers].addr, sizeof(s_peers[s_n_peers].addr), "%s", addr);
+    snprintf(s_peers[s_n_peers].name, sizeof(s_peers[s_n_peers].name), "%s",
+             (name && *name) ? name : "?");
+    s_peers[s_n_peers].last = now;
+    s_n_peers++;
+}
+
+int chat_peer_count(void)
+{
+    time_t now = time(NULL);
+    /* the ones that went quiet are gone */
+    for(int i = 0; i < s_n_peers; ) {
+        if(now - s_peers[i].last > 300) {
+            for(int j = i; j < s_n_peers - 1; j++) s_peers[j] = s_peers[j + 1];
+            s_n_peers--;
+            continue;
+        }
+        i++;
+    }
+    return s_n_peers;
+}
+
+const chat_peer_t * chat_peer_at(int i)
+{
+    if(i < 0 || i >= s_n_peers) return NULL;
+    return &s_peers[i];
 }

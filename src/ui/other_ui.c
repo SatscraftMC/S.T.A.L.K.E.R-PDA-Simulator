@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -71,6 +72,10 @@
                                name on the left */
 #define BACK_W       800
 #define BACK_H       452
+/* the mesh map on the Bitchat page */
+#define MESH_W       440
+#define MESH_H       250
+#define MESH_NODES   8
 
 enum { PAGE_SETTINGS = 0, PAGE_CONNECTIONS = 1, PAGE_USER = 2, PAGE_EXTRAS = 3 };
 
@@ -122,6 +127,10 @@ typedef struct {
     lv_obj_t * tog[4];
     char tog_key[4][24];
     int n_tog;
+
+    /* the mesh map on the Bitchat page */
+    lv_obj_t * mesh_canvas;
+    uint32_t mesh_buf[MESH_W * MESH_H];
 
     lv_obj_t * name_ta;
     lv_obj_t * room_ta;
@@ -380,6 +389,86 @@ static void page_info(void)
     live_row(g_ui.content, "System", "system", "OK", PDA_CARRIER_UP);
 }
 
+/* the mesh: the device in the middle and the devices it has heard around
+   it, the way the bitchat app draws it */
+static void mesh_text(lv_layer_t * layer, const char * text, int cx, int y, uint32_t color)
+{
+    if(!text || !text[0]) return;
+    lv_draw_label_dsc_t dsc;
+    lv_draw_label_dsc_init(&dsc);
+    dsc.text = text;
+    dsc.font = &pda_font_mono_10;
+    dsc.color = lv_color_hex(color);
+    dsc.align = LV_TEXT_ALIGN_CENTER;
+    lv_point_t sz;
+    lv_text_get_size(&sz, text, dsc.font, 0, 0, LV_COORD_MAX, LV_TEXT_ALIGN_CENTER);
+    lv_area_t area = { cx - sz.x / 2, y, cx - sz.x / 2 + sz.x, y + sz.y };
+    lv_draw_label(layer, &dsc, &area);
+}
+
+static void mesh_node(lv_layer_t * layer, int x, int y, int r, uint32_t ring, uint32_t fill)
+{
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    rect.bg_color = lv_color_hex(fill);
+    rect.bg_opa = LV_OPA_COVER;
+    rect.border_color = lv_color_hex(ring);
+    rect.border_width = 1;
+    rect.radius = LV_RADIUS_CIRCLE;
+    lv_area_t area = { x - r, y - r, x + r, y + r };
+    lv_draw_rect(layer, &rect, &area);
+}
+
+static void draw_mesh(void)
+{
+    if(!g_ui.mesh_canvas) return;
+
+    memset(g_ui.mesh_buf, 0, sizeof(g_ui.mesh_buf));
+
+    int n = chat_peer_count();
+    if(n > MESH_NODES) n = MESH_NODES;
+    int cx = MESH_W / 2;
+    int cy = MESH_H / 2 - 6;
+    /* the circle has to fit: the node and the name under it as well */
+    int radius = MESH_W / 2 - 90;
+    if(radius > MESH_H / 2 - 50) radius = MESH_H / 2 - 50;
+    if(radius < 28) radius = 28;
+
+    lv_layer_t layer;
+    lv_canvas_init_layer(g_ui.mesh_canvas, &layer);
+
+    /* the links from the middle to the peers */
+    for(int i = 0; i < n; i++) {
+        const chat_peer_t * p = chat_peer_at(i);
+        if(!p) continue;
+        double a = -M_PI / 2.0 + (double)i * 2.0 * M_PI / (n > 1 ? n : 1);
+        int x = cx + (int)(radius * cos(a));
+        int y = cy + (int)(radius * sin(a));
+
+        lv_draw_line_dsc_t line;
+        lv_draw_line_dsc_init(&line);
+        line.color = lv_color_hex(PDA_FRAME_INNER);
+        line.width = 1;
+        line.p1.x = cx;
+        line.p1.y = cy;
+        line.p2.x = x;
+        line.p2.y = y;
+        lv_draw_line(&layer, &line);
+
+        mesh_node(&layer, x, y, 9, PDA_MSG_ACCENT, PDA_PAGE_BG);
+        mesh_text(&layer, p->name, x, y + 13, PDA_MSG_TEXT);
+    }
+
+    /* this device, in the middle */
+    mesh_node(&layer, cx, cy, 11, PDA_MAP_ME, PDA_MAP_ME);
+    mesh_text(&layer, chat_identity(), cx, cy + 15, PDA_MSG_ACCENT);
+
+    if(n == 0)
+        mesh_text(&layer, "no peers heard yet", cx, MESH_H - 22, PDA_MSG_SYS);
+
+    lv_canvas_finish_layer(g_ui.mesh_canvas, &layer);
+}
+
 static void page_bitchat(void)
 {
     const char * sock = getenv("PDA_BITCHAT_SOCK");
@@ -387,6 +476,19 @@ static void page_bitchat(void)
     char buf[128];
 
     section(g_ui.content, "BITCHAT - LOCAL MESH");
+
+    /* the mesh: the nodes that have been heard, around this device */
+    lv_obj_t * canvas = lv_canvas_create(g_ui.content);
+    lv_canvas_set_buffer(canvas, g_ui.mesh_buf, MESH_W, MESH_H, LV_COLOR_FORMAT_ARGB8888);
+    lv_obj_set_size(canvas, MESH_W, MESH_H);
+    lv_obj_set_style_min_width(canvas, MESH_W, LV_PART_MAIN);
+    lv_obj_set_style_min_height(canvas, MESH_H, LV_PART_MAIN);
+    lv_obj_set_flex_grow(canvas, 0);
+    lv_obj_set_style_bg_opa(canvas, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(canvas, 0, LV_PART_MAIN);
+    lv_obj_set_clickable(canvas, false);
+    g_ui.mesh_canvas = canvas;
+    draw_mesh();
 
     lv_obj_t * r = row(g_ui.content, "Channel");
     lv_obj_t * ta = text_field(r, chat_mesh_channel());
@@ -406,7 +508,7 @@ static void page_bitchat(void)
 
     section(g_ui.content, "LINK");
     live_row(g_ui.content, "State", "bit_state", "offline", PDA_CARRIER_DOWN);
-    live_row(g_ui.content, "Peers heard", "bit_peers", "-", PDA_MSG_TEXT);
+    live_row(g_ui.content, "Peers heard", "bit_peers", "0", PDA_MSG_TEXT);
 }
 
 static void page_fips(void)
@@ -831,6 +933,7 @@ static void build_content(void)
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
+    g_ui.mesh_canvas = NULL;
 
     if(g_ui.page == PAGE_SETTINGS) page_settings(g_ui.sub);
     else if(g_ui.page == PAGE_CONNECTIONS) {
@@ -887,6 +990,11 @@ void other_ui_refresh(void)
                 set_live(i, tr ? chat_carrier_state_name(tr->state) : "OFFLINE",
                          tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN);
             }
+        }
+        else if(!strcmp(key, "bit_peers")) {
+            char n[16];
+            snprintf(n, sizeof(n), "%d", chat_peer_count());
+            set_live(i, n, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "bit_state")) {
             const chat_transport_t * tr = NULL;
@@ -1077,6 +1185,8 @@ static void other_ui_tick(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
     other_ui_refresh();
+    /* the mesh moves: new peers come and go */
+    if(g_ui.page == PAGE_CONNECTIONS && g_ui.sub == 1) draw_mesh();
 }
 
 /* the panel is rebuilt when the theme changes: the old timer has to go */

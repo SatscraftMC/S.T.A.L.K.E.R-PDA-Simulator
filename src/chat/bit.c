@@ -206,14 +206,23 @@ static void deliver_line(chat_transport_t * t, const char * line)
 
 static int bit_poll(chat_transport_t * t)
 {
-    bit_t * b = (bit_t *)t->priv;
+    bit_t * b = t->priv;
     int got = 0;
 
     char buf[2048];
     for(;;) {
-        ssize_t n = recv(b->udp, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+        struct sockaddr_in from;
+        socklen_t flen = sizeof(from);
+        ssize_t n = recvfrom(b->udp, buf, sizeof(buf) - 1, MSG_DONTWAIT,
+                             (struct sockaddr *)&from, &flen);
         if(n <= 0) break;
         buf[n] = 0;
+        /* the device that sent it is a node of the mesh */
+        char addr[40] = "";
+        inet_ntop(AF_INET, &from.sin_addr, addr, sizeof(addr));
+        char who[CHAT_NAME_MAX] = "";
+        json_get(buf, "from", who, sizeof(who));
+        chat_note_peer(addr, who);
         deliver_line(t, buf);
         got++;
     }
