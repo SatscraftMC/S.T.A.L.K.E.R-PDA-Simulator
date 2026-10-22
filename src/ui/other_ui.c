@@ -1448,7 +1448,7 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* test hooks: open a given page (PDA_OTHER_PAGE / PDA_OTHER_SUB). They
        only count at startup: after that the panel keeps the page it was on. */
     static bool first = true;
-    int page = PAGE_CONNECTIONS;
+    int page = PAGE_SETTINGS;
     int sub = 0;
     if(first) {
         first = false;

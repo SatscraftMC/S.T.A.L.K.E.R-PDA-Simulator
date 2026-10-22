@@ -1,393 +1,121 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.8-alpha**
+**v0.3.3-alpha**
 
-A handheld communicator in the spirit of the STALKER PDA: an offline map, a
-group chat that works over the local mesh, the FIPS mesh and the internet,
-contacts and a Lightning wallet.
+A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
-The UI is **LVGL v9** (C) in an 800x480 window. This repository is the
-**desktop simulator** of a device meant to run on a Raspberry Pi 3B with a 5"
-800x480 HDMI screen and physical buttons - which is why nothing here depends
-on a desktop environment.
+The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop simulator** of a device meant to run on a Raspberry Pi 3B with a 5" 800x480 HDMI screen and physical buttons.
 
-| | |
-|---|---|
-| ![the area map](docs/screenshots/area-map.png) | ![the room](docs/screenshots/messages.png) |
-| **The map** - real Esri satellite imagery of Madeira, 27 named places, 16 zoom steps from the whole archipelago down to about a metre per pixel. Drag to pan, wheel or buttons to zoom. | **The room** - one chat, every carrier. What you type goes out on the local mesh, the FIPS mesh and the internet at once; everything that comes in lands in the same log, tagged with the carrier it arrived on. |
-| ![connections](docs/screenshots/other-connections.png) | ![the user page](docs/screenshots/other-user.png) |
-| **Connections** - what is up and what each system is set to. | **User** - the name other devices see, the room, and what the message log shows. |
-| ![the settings](docs/screenshots/other-settings.png) | |
-| **Settings** - the device's own settings: the clock, the units, the language, the colour scheme. Every one of them works. | |
+## Screenshots
+
+| Map | Messages |
+|-----|----------|
+| ![map](docs/screenshots/area-map.png) | ![messages](docs/screenshots/messages.png) |
+
+| Connections | Settings | User |
+|-------------|----------|------|
+| ![connections](docs/screenshots/other-connections.png) | ![settings](docs/screenshots/other-settings.png) | ![user](docs/screenshots/other-user.png) |
 
 ## Features
 
-- **Offline map** with real Esri satellite imagery of Madeira, zoom levels
-  **64 - 10923** (from "whole archipelago" down to ~1 m per pixel).
-- **27 named places and areas** (Funchal, Curral das Freiras, Pico Ruivo,
-  Paúl da Serra, Porto Santo, Desertas, ...) drawn on the map, revealed in
-  tiers as you zoom in.
-- **Four layers on the map** - the strip under the tab bar switches
-  *Areas* (white rings), *Traders* (a bag of coins), *Stashes* (yellow
-  squares) and *Waypoints* (orange rings) on and off; the blue dot is where
-  you are.
-- **Waypoints and a route**: **right click** on the map puts a waypoint
-  down (a red pin), right click on it again takes it away. A line is drawn
-  from where you are to the first waypoint, and from there to the next one.
-  When you get within 5 m of the first waypoint it goes away by itself and
-  the next one becomes the goal. The route is remembered across restarts,
-  the **Waypoints** layer switches it on and off (putting one down turns it
-  on), and the button in the column of the zoom buttons takes the whole
-  route away.
-- **The coordinates** of the mouse and of the player are in the top right
-  corner of the map.
-- **The Traders layer is real**: every place that accepts bitcoin on Madeira
-  comes from [BTC Map](https://btcmap.org) (the OpenStreetMap `currency:XBT`
-  dataset) - 166 shops, cafés, pharmacies and hotels. They are drawn as a
-  bag of coins in a circle, and **tapping one opens its card**: the name,
-  the address, and what it takes (lightning, lightning contactless,
-  on-chain, a bitcoin ATM). The data is a pack, fetched by a tool, like the
-  map imagery (see below).
-- **Pack-based map system**: every region is a self-contained folder, so adding
-  a new map tile needs no code change (see below).
-- **One room, every carrier** (the Messages tab): what you type goes out on
-  every medium that is up - the local mesh, the FIPS mesh and the internet -
-  and everything that comes in shows up in the same log, tagged with the
-  carrier it arrived on.
-- **The carrier picker**: the strip of the Messages tab has one button per
-  carrier, in the space between the status and the carrier badges. Click one
-  and the message stops going out on it - one carrier, two or all three. A
-  carrier that is off still *receives*; it just does not send. The choice is
-  remembered.
-- **The newest message is at the top** of the log, like a chat that follows
-  the conversation down. The log scrolls back for the older lines.
-- **A map of the mesh** on *Other -> Connections -> Bitchat*: this device in
-  the middle and the devices it has heard around it, with their names under
-  the nodes and a line to each of them - the way the bitchat app draws it.
-  The peers are the ones the local mesh has heard from; a device that has
-  been quiet for five minutes is gone.
-- **The local mesh does not live on the broadcast alone**: the device walks
-  the local subnet looking for the other ones (a small "hi" every minute),
-  remembers where they live and sends the messages **straight to them**, next
-  to the broadcast. That is what makes the mesh work when the broadcast is
-  the one packet that gets dropped - by a firewall, by an access point that
-  does not forward broadcasts, by a router that keeps the wired and the
-  wireless side apart. *Discovery* on the Bitchat page shows the subnet that
-  is being walked.
-- **The firewall**: the mesh needs UDP 2425 open (`sudo ufw allow 2425/udp`).
-  The Bitchat page says so when nobody answers.
-- **The Other tab** is the device's control panel: a column of sections
-  (Settings, Connections, User, Extras), a column of sub-tabs, and the page
-  below that. *Connections* says what is connected (green, grey while it
-  tries, red when it is not there) and shows the settings of each system;
-  *User* is where the name other devices see and the message preferences live.
-- **A recenter button** on the map puts the view back on the blue dot.
-- **The STALKER guide look**: a gritty surface, panels with a double frame
-  and crop marks in the corners, hairline separators between the rows and
-  coloured section headings - the same encyclopedia screen the game uses.
-- STALKER-style UI: parallelogram tab bar, layer toggle strip, battery gauge,
-  live clock, gritty palette.
-- The **blue dot is the device's GPS position** (gpsd's NMEA socket on the Pi;
-  `PDA_GPS_LAT`/`PDA_GPS_LON` to force a position, `PDA_GPS_DEMO=1` for a slow
-  drift without hardware).
-- **Mouse wheel zooms towards the cursor** (the world point under the pointer
-  stays under the pointer); the +/- buttons zoom around the middle of the view.
+- **Offline map** with real Esri satellite imagery of Madeira, zoom 64–10923 (whole archipelago → ~1 m/px)
+- **27 named places** (Funchal, Curral das Freiras, Pico Ruivo, Paúl da Serra, Porto Santo, Desertas…) drawn in tiers as you zoom
+- **Four map layers** (Areas, Traders, Stashes, Waypoints) toggled by the strip under the tab bar; blue dot = GPS position
+- **Waypoints & route**: right-click to place/remove; line drawn from position → waypoint → next; auto-removes at 5 m; remembered across restarts; Waypoints layer toggles it; CLEAR button in zoom column
+- **Mouse & player coordinates** in top-right corner
+- **Traders layer = real bitcoin merchants** from [BTC Map](https://btcmap.org) (OSM `currency:XBT=yes`) — 166 places on Madeira; bag-of-coins icon; tapping opens card (name, address, lightning/contactless/on-chain/ATM, last checked year)
+- **Pack-based map system** — regions are self-contained folders, no code change to add new areas
+- **Messages tab: one room, three carriers** (BIT local mesh, FIPS mesh, NET internet); messages go out on all active carriers; incoming tagged by carrier
+- **Carrier picker** in Messages strip — per-carrier send toggle (off still receives); remembered in settings
+- **Newest message at top** of log; scroll back for older lines
+- **Mesh map** on Other → Connections → Bitchat — this device in center, peers around with names & lines; 5-min peer timeout
+- **Local mesh uses broadcast + direct peer unicast** — subnet sweep finds peers, messages sent directly to known peers (bypasses firewall/AP broadcast drops); discovery row shows subnet
+- **Firewall**: needs UDP 2425 (`sudo ufw allow 2425/udp`); Bitchat page warns when no peers answer
+- **Other tab = control panel** — left column: Settings / Connections / User / Extras; sub-tabs across top; page below
+- **Connections → Info** shows carrier status (green/grey/red); other pages show each system's settings
+- **Settings → User** holds device name, room, message log switches (all editable, remembered)
+- **Settings pages all work**: General, Advanced, Language (EN/PL), Themes (3 schemes × 3 accents), System
+- **Recenter button** on map (zoom column) — jumps view to blue dot
+- **STALKER guide aesthetic**: gritty surface, double-frame panels, crop-mark corners, hairline rules, coloured headings
+- **STALKER-style UI**: parallelogram tab bar, layer toggle strip, battery gauge, live clock, gritty palette
+- **GPS position** from gpsd NMEA socket (Pi); `PDA_GPS_LAT`/`PDA_GPS_LON` force position; `PDA_GPS_DEMO=1` for drift
+- **Wheel zooms to cursor** (world point under pointer stays fixed); +/- buttons zoom around view center
 
-## The Messages tab - one room, three carriers
+## Carriers
 
-![the messages tab](docs/screenshots/messages.png)
+| Carrier | Transport | Requirements |
+|---------|-----------|--------------|
+| **BIT** | UDP broadcast port 2425 (bitchat channel `#mesh`) | LAN/WiFi; WiFi = radio. No Bluetooth in simulator; real bitchat node via `PDA_BITCHAT_SOCK` bridge |
+| **NET** | TCP relay (`tools/relay.py`) | Relay process: `python3 tools/relay.py` on one machine; `PDA_RELAY_HOST=<ip>` on other |
+| **FIPS** | `fips` daemon native API (`/run/fips/api.sock`) | Daemon running; without it badge = red `no daemon` |
 
-The row in the strip says **SEND ON** and has one button per carrier: click
-a button and the messages stop going out on that carrier - the mesh only, the
-mesh and the internet, all three, whatever you like. The buttons look like
-the layer strip of the map: a small disc that says whether the carrier is
-used, and the tag of the carrier next to it. The choice is remembered in the
-settings file (`send_bit`, `send_fips`, `send_net`).
-
-The log has the **newest message at the top**; the older ones are below it
-and the log scrolls back for them.
-
-Everything rides the same envelope on all three carriers:
-
-```json
-{"v":1,"t":"msg","id":"7f2a91","from":"Satscraft","room":"SECTOR",
- "text":"anyone got the drop coords?","ts":1730000000}
-```
-
-| carrier | what it is | how it is wired |
-|---|---|---|
-| **BIT** | the local mesh - no server, no account, whoever is in earshot is in the room | UDP broadcast on port 2425 (the port the bitchat mesh uses), on one channel (`#mesh` by default, changeable). A real bitchat node can be wired in through a bridge: `PDA_BITCHAT_SOCK=/tmp/pda-bitchat.sock` |
-| **FIPS** | the FIPS mesh (Free Internetworking Peering System) | the daemon's **native datagram API**: `listen`/`connect` over the api socket, one datagram per message, no framing |
-| **NET** | the internet | a relay (`tools/relay.py`), which can itself bridge to an ntfy topic |
-
-Try it:
-
-```bash
-# a relay, then two clients
-python3 tools/relay.py --port 7788
-PDA_RELAY_PORT=7788 ./build/pda          # the PDA
-python3 - <<'EOF'
-import socket, json, time
-s = socket.create_connection(("127.0.0.1", 7788))
-s.sendall((json.dumps({"v":1,"t":"msg","id":"x1","from":"ROOK",
-  "room":"SECTOR","text":"anyone got the drop coords",
-  "ts":int(time.time())})+"\n").encode())
-time.sleep(1)
-EOF
-```
-
-The mesh carrier needs no setup at all: start two PDAs on the same network
-and they hear each other.
-
-### How the local mesh finds the other devices
-
-The carrier sends on **UDP 2425** (the port the bitchat mesh uses), on one
-channel (`#mesh` by default). It does it two ways, because the broadcast is
-the first packet that gets dropped:
-
-1. **the broadcast** - everyone in earshot hears it;
-2. **straight to the peers it knows** - the devices it has heard from, on
-   their own address and port.
-
-The peers are found by walking the local subnet: every minute a small
-`{"t":"hi"}` goes to the addresses of the network the device is on, and the
-device that answers says who it is and which port it listens on
-(`{"t":"hi-ack"}`). From then on the two talk to each other directly, and
-every ten seconds a "hi" keeps the flow open in the firewalls of both
-machines.
-
-The sweep can be turned off (`PDA_BIT_SCAN=off`) or pointed at other
-networks (`PDA_BIT_SCAN=10.0.0.0/24,192.168.1.0/24`); the *Discovery* row
-on the Bitchat page shows what is being walked.
-
-**The firewall has to let the port in**, otherwise the device is deaf:
-
-```bash
-sudo ufw allow 2425/udp
-```
-
-The Bitchat page says so when no peer answers. Both devices need it: the
-one that only has to *send* works with the firewall closed, the one that has
-to *receive* does not - which is why the mesh used to work in one direction
-only.
-
-**What each carrier needs, in one table:**
-
-| carrier | what carries it | what has to be there |
-|---|---|---|
-| **BIT** | UDP on the LAN (port 2425) | the network itself - **the WiFi is the radio**. Radio off, no LAN, no mesh: the badge goes red `no link`. There is no Bluetooth in the simulator; a real bitchat node plugs in through the bridge |
-| **NET** | a TCP connection to a relay | a relay *process* on one machine: `python3 tools/relay.py` (it listens on `0.0.0.0:7788`), and `PDA_RELAY_HOST=<that machine's ip>` on the other. No relay running: the badge stays grey `no relay` |
-| **FIPS** | the `fips` daemon | the daemon on the machine (`/run/fips/api.sock`). Without it the badge is red `no daemon` |
-
-When a message could not go out at all, the log says which carrier is why:
-`no carrier up - kept locally (BIT no link, FIPS no daemon, NET no relay)`.
-
-## The Other tab - settings, connections, extras
-
-![the other tab](docs/screenshots/other-connections.png)
-
-A column of sections on the left (Settings, Connections, Extras), a
-strip of sub-tabs across the top of the pane, the page below that. The
-sub-tabs belong to the section: *Settings* has General / Advanced / Language /
-Themes / System / User, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS.
-
-**Connections → Info** is the one that matters: it says whether each system
-is up - **green** when it is, **grey** while it is trying and **red** when
-it is not there. The other *Connections* pages show the settings of that system
-(the mesh channel, port and bridge, the fips sockets and the FSP port, the
-WiFi interface and its address, the live GPS data).
-
-**Settings → User** holds the personalisation: the name other devices see on
-your messages and the room you talk in (both editable, both remembered), and
-the switches for what the message log shows. The carrier badges in the top right
-of the Messages tab use the same colours: green, grey, red.
-
-**Settings** holds the device's own settings - every one of them works, and
-clicking a value steps through its choices:
-
-| page | what it does |
-|---|---|
-| General | the device name, 24 or 12 hour clock, metric or imperial units, the screen the device opens on |
-| Advanced | how often the GPS is looked at (1/2/5/10 s), how often the log is (200/500/1000 ms), and a button that empties the log |
-| Language | English or Polish (the tab bar, the menus and the buttons), the time zone (Local / UTC / Lisbon) and the region's number format (1.234.5 or 1.234,5) |
-| Themes | the colour scheme (Wasteland / Ash / Rust), the accent colour (Amber / Green / Blue) and the grain (the texture on the panels) on or off |
-| System | the version, the GPS state, the screen, the carriers, the language, the theme and where the settings file lives |
-
-The settings are remembered in `~/.config/pda/prefs.conf` (override with
-`PDA_PREFS`), so they survive a restart.
-
-
-## Environment
-
-| variable | what it does |
-|---|---|
-| `PDA_NAME` | the name other devices see (default `STALKER`) |
-| `PDA_ROOM` | the room name (default `SECTOR`) |
-| `PDA_PREFS` | where the settings file lives |
-| `PDA_RELAY_HOST` / `PDA_RELAY_PORT` | where the NET relay is (default `127.0.0.1:7788`) |
-| `PDA_BITCHAT_SOCK` / `PDA_BITCHAT_HOST` / `PDA_BITCHAT_PORT` | a bitchat bridge to plug into the local mesh |
-| `PDA_BITCHAT_PORT` | the mesh port (default 2425) |
-| `PDA_BIT_SCAN` | the subnets the local sweep walks (`off` to switch it off, or `10.0.0.0/24,192.168.1.0/24`) |
-| `PDA_MESH_CHANNEL` | the channel the local mesh talks on (default `mesh`) |
-| `PDA_FIPS_SOCK` / `PDA_FIPS_CTL` | the fips daemon's api and control sockets |
-| `PDA_FIPS_PORT` | the FSP port to talk on (default 4600) |
-| `PDA_START_TAB` | start on a given tab (1 = Messages, 6 = Other) - a test hook |
-| `PDA_OTHER_PAGE` / `PDA_OTHER_SUB` | open the Other tab on a given page - a test hook |
-| `PDA_TEST_SEND` | say this on startup - a test hook |
-| `PDA_TEST_SEND_IN` | say it this many seconds after the start - a test hook |
-
-### GPS on the Pi
-
-The app talks to **gpsd**'s NMEA socket (`127.0.0.1:2947`) and nothing else:
-
-```bash
-sudo apt install gpsd
-# USB module:
-sudo gpsd -F /dev/ttyUSB0
-# UART module (BN-880 on the Pi's 40-pin header): enable the serial port in
-# raspi-config (Interface Options -> Serial Port), then:
-sudo gpsd -F /dev/serial0
-gpspipe -w          # should print $GNRMC lines
-```
-
-The first fix needs a clear sky and can take a few minutes.
+When no carrier can send: `no carrier up - kept locally (BIT no link, FIPS no daemon, NET no relay)`.
 
 ## Build
 
-Requirements (Debian/Ubuntu):
-
 ```bash
-sudo apt install cmake libsdl2-dev libsdl2-image-dev libpng-dev zlib1g-dev nodejs npm
+sudo apt install cmake libsdl2-dev libsdl2-image-dev libpng-dev zlib1g-dev nodejs npm libglib2.0-dev
+./tools/fetch_deps.sh     # fetches LVGL v9.6.0 + reassembles split map levels
+./build.sh                # -> build/pda
+./build/pda               # 800x480 SDL window
 ```
 
-Then:
-
-```bash
-./tools/fetch_deps.sh     # fetches the vendored LVGL v9.6.0 (not in git)
-./build.sh               # -> build/pda
-./build/pda              # 800x480 SDL window, title "PDA // Simulator"
-```
-
-`tools/fetch_deps.sh` also **reassembles the map imagery** that is stored in
-this repo as split parts (see *Map packs* below) - run it once after cloning.
-
-## Map packs
-
-A **pack** is one rectangular region of the world, stored as a folder:
+## Map Packs
 
 ```
 assets/maps/<name>/
-    pack.cfg        bbox + one "level <z> <w> <h> <ox> <oy>" line per level
-    z<z>.rgb565     imagery, raw RGB565, row major
+    pack.cfg        bbox + "level <z> <w> <h> <ox> <oy>" per level
+    z<z>.rgb565     imagery, raw RGB565, row-major
 ```
 
-The app scans `assets/maps/*/pack.cfg` at startup, so **adding a region or a
-deeper zoom level for an existing region is just dropping files in a folder** -
-no code change. Point the app somewhere else with the `PDA_MAPS` environment
-variable (e.g. `PDA_MAPS=/home/pi/pda-maps` on the Pi).
+App scans `assets/maps/*/pack.cfg` at startup. Override with `PDA_MAPS=/path/to/maps`.
 
-Levels are Esri World Imagery tiles, fetched and packed with:
+Included packs:
 
-```bash
-python3 tools/fetch_map.py --name madeira --lon0 -17.35 --lon1 -16.15 \
-                            --lat0 33.12 --lat1 32.30 --zooms 12,13
-```
-
-Already included:
-
-| pack | levels | coverage |
-|---|---|---|
+| Pack | Levels | Coverage |
+|------|--------|----------|
 | `madeira` | z12, z13 | whole archipelago + Porto Santo + Desertas |
-| `madeira-island` | z14 | the island itself, ~9.5 m/px |
+| `madeira-island` | z14 | island, ~9.5 m/px |
 | `funchal` | z15, z16, z17 | Funchal area, down to ~1.2 m/px |
 
-The two biggest levels exceed GitHub's 100 MB per-file limit, so they are
-stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
-`tools/fetch_deps.sh` puts them back together automatically.
+Large levels >100 MB stored as split parts (`z14.rgb565.part*`, `z17.rgb565.part*`); `tools/fetch_deps.sh` reassembles.
 
-## The traders pack (BTC Map)
-
-The **Traders** layer is the set of places that accept bitcoin, from
-[BTC Map](https://btcmap.org) - which is the OpenStreetMap `currency:XBT=yes`
-dataset, refreshed every ten minutes. It is a pack too:
+## Traders Pack (BTC Map)
 
 ```
 assets/poi/<name>/
-    pack.cfg        the manifest: name, count, source, date, the licence
-    places.bin      the places, fixed size records (152 bytes each)
+    pack.cfg        manifest: name, count, source, date, licence
+    places.bin      152-byte fixed records
 ```
-
-The app scans `assets/poi/*/pack.cfg` at startup, so a new region is again
-just a folder. `PDA_POIS` points it somewhere else.
-
-Fetched with the BTC Map's own Overpass instance, with the same query they
-use:
 
 ```bash
 python3 tools/fetch_btc.py --name madeira --lat 32.6669 --lon -16.9247 --radius-km 30
-# or a box:  python3 tools/fetch_btc.py --name madeira --bbox 32.55,-17.45,33.25,-16.55
+# or: python3 tools/fetch_btc.py --name madeira --bbox 32.55,-17.45,33.25,-16.55
 ```
 
-Madeira is 166 places in 25 KB. The whole planet would be ~30 000 places in
-4.5 MB.
-
-The merchants are drawn into the map canvas (an LVGL object each would be
-too much for hundreds of them), and the ones that stand close together are
-one icon, or the city would be a blue blob. **Tapping one opens its card**:
-the name, the address and what it takes - lightning, lightning contactless,
-on-chain, a bitcoin ATM, and when it was last checked.
-
-The data is © OpenStreetMap contributors (ODbL), via BTC Map.
-
-## How the map works
-
-- All positions (place names, markers, the view centre) are **geographic**,
-  so they stay correct across packs and zoom levels.
-- The world is mapped onto a pixel grid at a reference level; one grid unit
-  equals `zoom/256` screen pixels, which makes the zoom scale identical for
-  every pack.
-- Rendering is a hand-written blit into an RGB565 canvas - no `lv_image`
-  scaling, no LVGL scrolling - so zooming is deterministic and always anchored
-  on the screen centre, and dragging tracks the finger 1:1 at every zoom.
-- Imagery is **mmap'ed**, so the kernel pages it out instead of it sitting in
-  RAM - important for the 1 GB Pi.
+Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Tools
 
-| tool | what it does |
-|---|---|
-| `tools/fetch_map.py` | build a map pack from Esri World Imagery tiles |
-| `tools/fetch_btc.py` | build a traders pack (the bitcoin merchants) from BTC Map |
-| `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
-| `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
-| `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh, the local sweep that finds the peers and the FIPS native API |
-| `tools/mesh_netns_test.sh` | the local mesh over a **real** link (a veth pair and a network namespace): the sweep finds the other device, the message goes straight to it, and the firewall decides what comes in. Needs root |
-| `tools/ui_test.py` | bug hunt for the UI: every tab and every page, the name and the room being saved, a broken settings file, a name that would break the wire format, the mesh channel, the recenter button, and driving the app hard |
-| `tools/relay.py` | the reference relay for the NET carrier (can bridge to an ntfy topic) |
-| `tools/bitchat_bridge.py` | bridge between the local mesh carrier and a real bitchat node |
-| `tools/fips_mock.py` | a mock of the fips daemon's native datagram API, for testing the FIPS carrier |
-| `tools/make_screenshots.py` | take the pictures in `docs/screenshots/` |
-| `tools/gen_fonts.sh` | regenerate the bitmap fonts (Share Tech Mono, VT323, DSEG7) |
-
-| `tools/fetch_deps.sh` | fetch LVGL + reassemble the split map levels |
-
-### The fonts
-
-The interface is drawn in **Share Tech Mono** (and the titles in **VT323**),
-as 1 bit bitmaps - no font file at runtime, nothing to load on the Pi. Share
-Tech Mono has no Polish letters apart from "ó" and "ł", so the ones it is
-missing come from **VT323**, which is wired in as the fallback font of the
-interface fonts. `tools/gen_fonts.sh` regenerates all of it.
+| Tool | Purpose |
+|------|---------|
+| `tools/fetch_map.py` | build map pack from Esri tiles |
+| `tools/fetch_btc.py` | build traders pack from BTC Map |
+| `tools/rgb565_pack.c` | fast RGB565 packer |
+| `tools/analyze_map.py` | screenshot analysis: zoom steps, scale, geo-alignment, pan, artifacts |
+| `tools/chat_test.py` | end-to-end test: relay, mesh, sweep, FIPS |
+| `tools/mesh_netns_test.sh` | mesh over real link (veth + netns); needs root |
+| `tools/ui_test.py` | UI bug hunt: every tab/page, settings, broken prefs, mesh channel, recenter, hard drive |
+| `tools/relay.py` | NET carrier reference relay |
+| `tools/bitchat_bridge.py` | bridge local mesh ↔ real bitchat node |
+| `tools/fips_mock.py` | mock fips daemon for testing |
+| `tools/make_screenshots.py` | regenerate docs/screenshots/ |
+| `tools/gen_fonts.sh` | regenerate bitmap fonts (Share Tech Mono, VT323, DSEG7) |
+| `tools/fetch_deps.sh` | fetch LVGL + reassemble split map levels |
 
 ## Status
 
-Phase 3 (the map screen) is functional, the Messages tab is a real group
-chat over three carriers, and the Other tab is the settings/connections/user
-panel - and every setting in it works. Still to come: wallet/QR payments,
-camera, radio, real navigation stack, input abstraction (sim -> GPIO/evdev),
-and the Pi port (DRM/KMS + systemd boot-to-app). The *Extras* page of the
-Other tab is still empty, and the pages' contents are still English even when
-the language is set to Polski.
+Map screen, Messages tab (3 carriers), Other tab (all settings work) functional. TODO: wallet/QR, camera, radio, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; UI still English when language = Polski.
 
 ## License
 
