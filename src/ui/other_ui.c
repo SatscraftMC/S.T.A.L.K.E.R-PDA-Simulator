@@ -476,10 +476,9 @@ static void draw_mesh(void)
 static void page_bitchat(void)
 {
     const char * sock = getenv("PDA_BITCHAT_SOCK");
-    const char * host = getenv("PDA_BITCHAT_HOST");
     char buf[128];
 
-    section(g_ui.content, "BITCHAT - LOCAL MESH");
+    section(g_ui.content, "BITCHAT - BLUETOOTH");
 
     /* the mesh: the nodes that have been heard, around this device */
     lv_obj_t * canvas = lv_canvas_create(g_ui.content);
@@ -502,13 +501,14 @@ static void page_bitchat(void)
     g_ui.chan_btn = save_button(r, on_save_channel);
     g_ui.chan_btn_lbl = lv_obj_get_child(g_ui.chan_btn, 0);
 
-    snprintf(buf, sizeof(buf), "%s", getenv("PDA_BITCHAT_PORT") ? getenv("PDA_BITCHAT_PORT")
-                                                                 : "2425");
-    live_row(g_ui.content, "Mesh port", "bit_port", buf, PDA_MSG_TEXT);
+    live_row(g_ui.content, "Bluetooth", "bit_radio", "no adapter", PDA_MSG_TEXT);
+    snprintf(buf, sizeof(buf), "%s", getenv("PDA_NET_PORT") ? getenv("PDA_NET_PORT")
+                                                            : "7788");
+    live_row(g_ui.content, "LAN port", "net_port", buf, PDA_MSG_TEXT);
     live_row(g_ui.content, "Discovery", "bit_scan", "off", PDA_MSG_TEXT);
     live_row(g_ui.content, "Bridge", "bit_bridge",
-             (sock && *sock) ? sock : ((host && *host) ? host : "not connected"),
-             (sock || host) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
+             (sock && *sock) ? sock : "not connected",
+             (sock && *sock) ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
     live_row(g_ui.content, "Node name", "bit_name", chat_identity(), PDA_MSG_TEXT);
 
     section(g_ui.content, "LINK");
@@ -518,8 +518,8 @@ static void page_bitchat(void)
     /* the mesh needs the port open: a firewall that drops what comes in
        leaves the device deaf, and nobody can hear it either */
     lv_obj_t * hint = label(g_ui.content, 0, 0, 300,
-                             "no peers? the firewall may hold port 2425\n"
-                             "sudo ufw allow 2425/udp",
+                             "no peers? the firewall may hold port 7788\n"
+                             "sudo ufw allow 7788/udp",
                              &pda_font_mono_10, PDA_MSG_SYS);
     lv_obj_set_flex_grow(hint, 0);
     lv_obj_set_height(hint, 26);
@@ -1019,8 +1019,13 @@ void other_ui_refresh(void)
         }
         else if(!strcmp(key, "bit_scan")) {
             char scan[96] = "off";
-            bit_scan_text(scan, sizeof(scan));
+            net_scan_text(scan, sizeof(scan));
             set_live(i, scan, PDA_MSG_TEXT);
+        }
+        else if(!strcmp(key, "bit_radio")) {
+            char radio[64] = "no adapter";
+            bit_info_text(radio, sizeof(radio));
+            set_live(i, radio, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "bit_state")) {
             const chat_transport_t * tr = NULL;

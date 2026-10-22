@@ -641,6 +641,26 @@ const char * bit_scan_text(char * out, size_t outn)
     return out;
 }
 
+/* what the bluetooth radio is (address and channel, or "no adapter") */
+const char * bit_info_text(char * out, size_t outn)
+{
+    bit_t * b = &s_bit;
+    if(b->udp < 0) {
+        snprintf(out, outn, "not started");
+        return out;
+    }
+    if(!b->have_link) {
+        snprintf(out, outn, "no link");
+        return out;
+    }
+    if(b->bridge_want) {
+        snprintf(out, outn, "bridged");
+        return out;
+    }
+    snprintf(out, outn, "port %d", b->port);
+    return out;
+}
+
 void chat_bit_register(void)
 {
     memset(&s_bit, 0, sizeof(s_bit));

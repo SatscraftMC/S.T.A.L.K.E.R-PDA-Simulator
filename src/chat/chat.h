@@ -117,9 +117,12 @@ typedef struct {
    peer directly on that port, not only through the broadcast. */
 void chat_note_peer(const char * addr, int port, const char * name);
 
-/* the subnets the local mesh sweeps looking for the other devices
+/* the subnets the local net walks looking for the other devices
    ("192.168.1.0/24", or "off") */
-const char * bit_scan_text(char * out, size_t outn);
+const char * net_scan_text(char * out, size_t outn);
+
+/* what the bluetooth radio is (address and channel, or "no adapter") */
+const char * bit_info_text(char * out, size_t outn);
 int chat_peer_count(void);
 const chat_peer_t * chat_peer_at(int i);
 
