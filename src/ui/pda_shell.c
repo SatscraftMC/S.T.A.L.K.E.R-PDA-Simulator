@@ -9,6 +9,7 @@
 #include "assets/fonts/pda_fonts.h"
 #include "gps.h"
 #include "chat/chat.h"
+#include "poi.h"
 
 #include <string.h>
 #include <time.h>
@@ -121,6 +122,9 @@ typedef struct {
     lv_obj_t * overlay;
     lv_obj_t * zoom_btn[3];
     lv_obj_t * pack_lbl;
+    lv_obj_t * poi_card;           /* the card of a tapped merchant */
+    lv_obj_t * poi_card_name;
+    lv_obj_t * poi_card_info;
     lv_timer_t * gps_timer;
     map_pack_t packs[MAX_PACKS];
     int n_packs;
@@ -444,6 +448,8 @@ static void on_sub_click(lv_event_t * e)
     int i = (int)(lv_intptr_t)lv_event_get_user_data(e);
     sh->sub_on[i] = !sh->sub_on[i];   /* and the layer comes with it */
     apply_layers(sh);
+    /* the card belongs to the traders: it goes when they do */
+    if(i == 2 && sh->poi_card) lv_obj_set_hidden(sh->poi_card, true);
     redraw_header();
     restyle_labels();
 }
@@ -911,9 +917,6 @@ static const map_point_t g_map_points[] = {
     /* Areas - the two big ones */
     { 1, "Curral das Freiras",    -16.9722, 32.7114, 26, PDA_C_MAP_AREA,      MARK_RING },
     { 1, "Ponta de Sao Lourenco", -16.6900, 32.7260, 26, PDA_C_MAP_AREA,      MARK_RING },
-    /* Traders */
-    { 2, "Funchal harbour",      -16.9247, 32.6400, 13, PDA_C_MAP_TRADER,    MARK_CIRCLE },
-    { 2, "Canico",                -16.8439, 32.6611, 13, PDA_C_MAP_TRADER,    MARK_CIRCLE },
     /* Stashes */
     { 3, "Calheta",               -17.1700, 32.7167, 13, PDA_C_MAP_STASH,     MARK_SQUARE },
     { 3, "Pico Ruivo",            -16.9422, 32.7569, 13, PDA_C_MAP_STASH,     MARK_SQUARE },
@@ -931,6 +934,119 @@ static void apply_layers(shell_t * sh)
         int layer = sh->marker_layer[i];
         if(layer < 0) continue;                 /* the player is always there */
         lv_obj_set_hidden(sh->markers[i], !sh->sub_on[layer]);
+    }
+}
+
+/* ---------- the traders (BTC Map) ---------- */
+
+/* The merchants are drawn into the map canvas: there are hundreds of them
+ * and an LVGL object each would be too much. The icon is a circle around a
+ * bag of coins, in a desaturated blue. */
+
+#define POI_ICON      18      /* the icon is 18x18 */
+#define POI_CLUSTER   16      /* merchants this close are one icon */
+#define POI_VISIBLE   1024    /* the most that are drawn at once */
+
+typedef struct {
+    int x, y, idx;
+} poi_screen_t;
+
+static poi_screen_t s_poi_screen[POI_VISIBLE];
+
+/* the bag of coins in the middle of the circle */
+static const char * const g_bag_bitmap[9] = {
+    "..###..",
+    "..###..",
+    ".#####.",
+    "#######",
+    "#######",
+    "#######",
+    ".#####.",
+    "..###..",
+    "..###..",
+};
+
+static uint16_t rgb565_of(uint32_t rgb)
+{
+    return (uint16_t)(((rgb >> 19 & 31) << 11) | ((rgb >> 10 & 63) << 5) |
+                      (rgb >> 3 & 31));
+}
+
+static void view_px(shell_t * sh, int x, int y, uint16_t c)
+{
+    if(x < 0 || y < 0 || x >= MAP_VIEW_W || y >= MAP_VIEW_H) return;
+    sh->view_buf[(long)y * MAP_VIEW_W + x] = c;
+}
+
+/* the circle around the bag of coins */
+static void draw_trader_icon(shell_t * sh, int cx, int cy, uint16_t col)
+{
+    for(int j = 0; j < POI_ICON; j++) {
+        for(int i = 0; i < POI_ICON; i++) {
+            double dx = i + 0.5 - POI_ICON / 2.0;
+            double dy = j + 0.5 - POI_ICON / 2.0;
+            double d = sqrt(dx * dx + dy * dy);
+            if(d < 6.8 || d > 8.6) continue;
+            view_px(sh, cx + i - POI_ICON / 2, cy + j - POI_ICON / 2, col);
+        }
+    }
+    for(int j = 0; j < 9; j++) {
+        const char * row = g_bag_bitmap[j];
+        for(int i = 0; i < 9; i++) {
+            if(row[i] != '#') continue;
+            view_px(sh, cx + i - 4, cy + j - 4, col);
+        }
+    }
+}
+
+/* where a place is on the map, in the map's own coordinates */
+static void poi_screen_pos(shell_t * sh, int zn, const poi_place_t * p, int * x, int * y)
+{
+    double zscale = zn / 256.0;
+    *x = (int)((geo_w_x(p->lon) - geo_w_x(sh->lon_c)) * zscale + 400.0);
+    *y = (int)((geo_w_y(p->lat) - geo_w_y(sh->lat_c)) * zscale + 205.0);
+}
+
+/* the merchants of the Traders layer. The ones that stand close together
+ * are one icon, or the city would be a blue blob. */
+static void draw_poi_layer(shell_t * sh, int zn)
+{
+    int n = poi_count();
+    if(n <= 0) return;
+
+    int m = 0;
+    for(int i = 0; i < n && m < POI_VISIBLE; i++) {
+        const poi_place_t * p = poi_get(i);
+        int x, y;
+        poi_screen_pos(sh, zn, p, &x, &y);
+        if(x < -POI_ICON || x > MAP_VIEW_W + POI_ICON) continue;
+        if(y < -POI_ICON || y > MAP_VIEW_H + POI_ICON) continue;
+        s_poi_screen[m].x = x;
+        s_poi_screen[m].y = y;
+        s_poi_screen[m].idx = i;
+        m++;
+    }
+    if(m <= 0) return;
+
+    uint16_t col = rgb565_of(PDA_MAP_TRADER);
+    static char taken[POI_VISIBLE];
+    memset(taken, 0, (size_t)m);
+
+    for(int i = 0; i < m; i++) {
+        if(taken[i]) continue;
+        double sx = 0, sy = 0;
+        int c = 0;
+        for(int j = 0; j < m; j++) {
+            if(taken[j]) continue;
+            double dx = s_poi_screen[j].x - s_poi_screen[i].x;
+            double dy = s_poi_screen[j].y - s_poi_screen[i].y;
+            if(dx * dx + dy * dy > (double)POI_CLUSTER * POI_CLUSTER) continue;
+            taken[j] = 1;
+            sx += s_poi_screen[j].x;
+            sy += s_poi_screen[j].y;
+            c++;
+        }
+        draw_trader_icon(sh, (int)(sx / c), (int)(sy / c), col);
     }
 }
 
@@ -1087,6 +1203,9 @@ static void map_update(shell_t * sh)
         }
     }
 
+    /* the traders of the BTC Map pack, under the names of the places */
+    if(sh->sub_on[2]) draw_poi_layer(sh, zn);
+
     if(sh->n_packs) draw_map_labels(sh, zn);
 
     double wc = geo_w_x(sh->lon_c);
@@ -1187,6 +1306,95 @@ static void on_map_press(lv_event_t * e)
     if(indev) lv_indev_get_point(indev, &g_last_pt);
 }
 
+/* what a merchant takes, in words */
+static void poi_flags_text(const poi_place_t * p, char * buf, size_t n)
+{
+    char tmp[112];
+    size_t used = 0;
+    tmp[0] = 0;
+
+    /* append a word to the list */
+    for(int i = 0; i < 6; i++) {
+        const char * w = NULL;
+        char year[16];
+        switch(i) {
+            case 0: if(p->flags & POI_F_LIGHTNING) w = "lightning"; break;
+            case 1: if(p->flags & POI_F_CONTACTLESS) w = "lightning contactless"; break;
+            case 2: if(p->flags & POI_F_ONCHAIN) w = "on-chain"; break;
+            case 3: if(p->flags & POI_F_ATM) w = "bitcoin ATM"; break;
+            case 4: if(p->flags & POI_F_COMPANION) w = "needs an app"; break;
+            case 5:
+                if(p->flags & POI_F_VERIFIED) {
+                    snprintf(year, sizeof(year), "checked %u", (unsigned)p->year);
+                    w = year;
+                }
+                break;
+        }
+        if(!w) continue;
+        int len = snprintf(tmp + used, sizeof(tmp) - used, "%s%s", used ? ", " : "", w);
+        if(len < 0 || (size_t)len >= sizeof(tmp) - used) break;
+        used += len;
+    }
+    snprintf(buf, n, "%s", tmp);
+}
+
+/* the merchant under the finger, if there is one */
+static int poi_under(int mx, int my)
+{
+    shell_t * sh = &g_sh;
+    if(!sh->sub_on[2]) return -1;
+    int n = poi_count();
+    int best = -1;
+    double best_d = 14.0 * 14.0;
+    for(int i = 0; i < n; i++) {
+        const poi_place_t * p = poi_get(i);
+        int x, y;
+        poi_screen_pos(sh, g_zoom_levels[sh->zoom_idx], p, &x, &y);
+        double dx = x - mx, dy = y - my;
+        double d = dx * dx + dy * dy;
+        if(d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+/* a tap on the map opens the card of the merchant that is there */
+static void on_map_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    shell_t * sh = &g_sh;
+    if(!sh->poi_card) return;
+
+    lv_indev_t * indev = lv_indev_active();
+    if(!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    int mx = p.x;
+    int my = p.y - MAP_VIEW_Y;
+
+    int i = poi_under(mx, my);
+    if(i < 0) {
+        lv_obj_set_hidden(sh->poi_card, true);
+        return;
+    }
+
+    const poi_place_t * place = poi_get(i);
+    char flags[96];
+    poi_flags_text(place, flags, sizeof(flags));
+
+    char line[160];
+    snprintf(line, sizeof(line), "%s%s%s", place->name[0] ? place->name : "(no name)",
+             place->address[0] ? " - " : "", place->address);
+    lv_label_set_text(sh->poi_card_name, line);
+    snprintf(line, sizeof(line), "%s%s%s", flags,
+             place->category[0] ? " - " : "", place->category);
+    lv_label_set_text(sh->poi_card_info, line);
+    lv_obj_set_hidden(sh->poi_card, false);
+    lv_obj_move_foreground(sh->poi_card);
+}
+
 static void on_map_pressing(lv_event_t * e)
 {
     shell_t * sh = &g_sh;
@@ -1198,6 +1406,10 @@ static void on_map_pressing(lv_event_t * e)
     double zscale = g_zoom_levels[sh->zoom_idx] / 256.0;
     /* zscale = screen px per W unit, so one screen px = 1/zscale W units.
        The map must follow the finger 1:1 at every zoom level. */
+    if(sh->poi_card && !lv_obj_is_hidden(sh->poi_card)) {
+        /* the map is moving: the card would be about a place that is gone */
+        lv_obj_set_hidden(sh->poi_card, true);
+    }
     double dw = -(p.x - g_last_pt.x) / zscale;
     double dh = -(p.y - g_last_pt.y) / zscale;
     sh->lon_c += dw / geo_w_per_deg_lon();
@@ -1222,6 +1434,8 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     sh->map = map;
 
     load_packs(sh);
+    /* the merchants of BTC Map (the Traders layer) */
+    poi_load(NULL);
 
     sh->view_buf = malloc(MAP_VIEW_W * MAP_VIEW_H * 2);
     sh->map_canvas = lv_canvas_create(map);
@@ -1307,7 +1521,7 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     }
 
     lv_obj_t * att = lv_label_create(overlay);
-    lv_label_set_text(att, "(c) OSM  Imagery (c) Esri");
+    lv_label_set_text(att, "(c) OSM  Imagery (c) Esri  BTC Map");
     lv_obj_align(att, LV_ALIGN_BOTTOM_LEFT, 8, -4);
     lv_obj_set_style_text_font(att, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(att, lv_color_hex(PDA_SUB_DOT_OFF), LV_PART_MAIN);
@@ -1318,8 +1532,39 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_style_text_font(sh->pack_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->pack_lbl, lv_color_hex(PDA_SUB_DOT_OFF), LV_PART_MAIN);
 
+    /* the card of a merchant: it opens when one is tapped */
+    lv_obj_t * card = lv_obj_create(overlay);
+    lv_obj_set_pos(card, 8, MAP_VIEW_H - 62);
+    lv_obj_set_size(card, 420, 46);
+    lv_obj_set_style_bg_color(card, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(card, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(card, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_radius(card, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(card, 4, LV_PART_MAIN);
+    lv_obj_set_clickable(card, false);
+    lv_obj_set_hidden(card, true);
+    sh->poi_card = card;
+
+    sh->poi_card_name = lv_label_create(card);
+    lv_label_set_text(sh->poi_card_name, "");
+    lv_obj_set_pos(sh->poi_card_name, 2, 2);
+    lv_obj_set_width(sh->poi_card_name, 404);
+    lv_label_set_long_mode(sh->poi_card_name, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(sh->poi_card_name, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sh->poi_card_name, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+
+    sh->poi_card_info = lv_label_create(card);
+    lv_label_set_text(sh->poi_card_info, "");
+    lv_obj_set_pos(sh->poi_card_info, 2, 15);
+    lv_obj_set_width(sh->poi_card_info, 404);
+    lv_label_set_long_mode(sh->poi_card_info, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(sh->poi_card_info, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sh->poi_card_info, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
+
     lv_obj_add_event_cb(map, on_map_press, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(map, on_map_pressing, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(map, on_map_click, LV_EVENT_CLICKED, NULL);
 
     map_update(sh);   /* position markers into viewport coords */
 }

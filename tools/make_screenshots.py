@@ -47,6 +47,19 @@ def capture(path):
     return path
 
 
+def click(x, y):
+    """one click, in the app's own coordinates (the window is at 560,300)"""
+    from Xlib import display, X
+    from Xlib.ext import xtest
+    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
+    time.sleep(0.4)
+    d = display.Display()
+    sx, sy = 560 + x, 300 + y
+    xtest.fake_input(d, X.MotionNotify, x=sx, y=sy); d.sync(); time.sleep(0.08)
+    xtest.fake_input(d, X.ButtonPress, 1); d.sync(); time.sleep(0.08)
+    xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.5)
+
+
 def run(env_extra, shot_name, before=None, after=None):
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":0")
@@ -72,9 +85,12 @@ def main():
     subprocess.run(["pkill", "-x", "pda"], capture_output=True)
     time.sleep(0.5)
 
-    # the map
+    # the map - with the traders on, so the picture shows the merchants
+    def traders_on():
+        click(163 + 148 + 6, 45)      # the Traders button of the second row
+
     run({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478", "PDA_GPS_LON": "-16.9193"},
-        "area-map.png")
+        "area-map.png", before=traders_on)
 
     # the other tab
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1", "PDA_OTHER_SUB": "0"},

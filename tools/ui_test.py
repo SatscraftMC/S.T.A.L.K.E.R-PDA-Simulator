@@ -574,7 +574,7 @@ def test_map_layers():
         time.sleep(3.0)
 
         COLOURS = {"area": (255, 255, 255),        # the rings
-                   "trader": (95, 191, 106),      # the green dots
+                   "trader": (131, 165, 180),     # the bag of coins (BTC Map)
                    "stash": (255, 211, 42),       # the yellow squares
                    "waypoint": (243, 156, 18)}    # the orange rings
         LAYER_X = {"trader": 163 + 148, "stash": 163 + 296, "waypoint": 163 + 444}
@@ -588,8 +588,8 @@ def test_map_layers():
             for y in range(69 + 32, h):       # the map's area (the title bar is 32)
                 for x in range(w):
                     r, g, b = px[x, y]
-                    if abs(r - colour[0]) < 20 and abs(g - colour[1]) < 20 \
-                       and abs(b - colour[2]) < 20:
+                    if abs(r - colour[0]) < 16 and abs(g - colour[1]) < 16 \
+                       and abs(b - colour[2]) < 16:
                         n += 1
             return n
 

@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.1.8-alpha**
+**v0.2.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -28,8 +28,16 @@ on a desktop environment.
   Paúl da Serra, Porto Santo, Desertas, ...) drawn on the map, revealed in
   tiers as you zoom in.
 - **Four layers on the map** - the strip under the tab bar switches
-  *Areas* (white rings), *Traders* (green dots), *Stashes* (yellow squares)
-  and *Waypoints* (orange rings) on and off; the blue dot is where you are.
+  *Areas* (white rings), *Traders* (a bag of coins), *Stashes* (yellow
+  squares) and *Waypoints* (orange rings) on and off; the blue dot is where
+  you are.
+- **The Traders layer is real**: every place that accepts bitcoin on Madeira
+  comes from [BTC Map](https://btcmap.org) (the OpenStreetMap `currency:XBT`
+  dataset) - 166 shops, cafés, pharmacies and hotels. They are drawn as a
+  bag of coins in a circle, and **tapping one opens its card**: the name,
+  the address, and what it takes (lightning, lightning contactless,
+  on-chain, a bitcoin ATM). The data is a pack, fetched by a tool, like the
+  map imagery (see below).
 - **Pack-based map system**: every region is a self-contained folder, so adding
   a new map tile needs no code change (see below).
 - **One room, every carrier** (the Messages tab): what you type goes out on
@@ -210,6 +218,40 @@ The two biggest levels exceed GitHub's 100 MB per-file limit, so they are
 stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 `tools/fetch_deps.sh` puts them back together automatically.
 
+## The traders pack (BTC Map)
+
+The **Traders** layer is the set of places that accept bitcoin, from
+[BTC Map](https://btcmap.org) - which is the OpenStreetMap `currency:XBT=yes`
+dataset, refreshed every ten minutes. It is a pack too:
+
+```
+assets/poi/<name>/
+    pack.cfg        the manifest: name, count, source, date, the licence
+    places.bin      the places, fixed size records (152 bytes each)
+```
+
+The app scans `assets/poi/*/pack.cfg` at startup, so a new region is again
+just a folder. `PDA_POIS` points it somewhere else.
+
+Fetched with the BTC Map's own Overpass instance, with the same query they
+use:
+
+```bash
+python3 tools/fetch_btc.py --name madeira --lat 32.6669 --lon -16.9247 --radius-km 30
+# or a box:  python3 tools/fetch_btc.py --name madeira --bbox 32.55,-17.45,33.25,-16.55
+```
+
+Madeira is 166 places in 25 KB. The whole planet would be ~30 000 places in
+4.5 MB.
+
+The merchants are drawn into the map canvas (an LVGL object each would be
+too much for hundreds of them), and the ones that stand close together are
+one icon, or the city would be a blue blob. **Tapping one opens its card**:
+the name, the address and what it takes - lightning, lightning contactless,
+on-chain, a bitcoin ATM, and when it was last checked.
+
+The data is © OpenStreetMap contributors (ODbL), via BTC Map.
+
 ## How the map works
 
 - All positions (place names, markers, the view centre) are **geographic**,
@@ -228,6 +270,7 @@ stored here as **split parts** (`z14.rgb565.part*`, `z17.rgb565.part*`).
 | tool | what it does |
 |---|---|
 | `tools/fetch_map.py` | build a map pack from Esri World Imagery tiles |
+| `tools/fetch_btc.py` | build a traders pack (the bitcoin merchants) from BTC Map |
 | `tools/rgb565_pack.c` | fast RGB565 packer (the naive Python one takes ~1 h per level) |
 | `tools/analyze_map.py` | screenshot analysis harness: zoom steps, scale progression, geo-alignment against the raw masters, pan tracking, artifact scan |
 | `tools/chat_test.py` | end to end test of the Messages tab: the relay, the local mesh and the FIPS native API |
