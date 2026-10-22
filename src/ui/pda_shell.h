@@ -5,13 +5,17 @@
 
 /* which build this is - the app says it when it starts, so a stale process
    is easy to spot */
-#define PDA_VERSION   "v0.2.0-alpha"
+#define PDA_VERSION   "v0.2.1-alpha"
 
 lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group);
 
 /* Mouse wheel over the map: zoom one step towards the cursor. (x, y) are
    window coordinates, diff is the wheel delta (positive = scrolling up). */
 void pda_shell_wheel(int diff, int x, int y);
+
+/* Right click on the map: put a waypoint down (or take the one that is
+   there away). (x, y) are window coordinates. */
+void pda_shell_right_click(int x, int y);
 
 /* The theme or the language changed: the panels are built with the colours
    and the words, so they are built again. */

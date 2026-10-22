@@ -33,6 +33,11 @@ static int SDLCALL on_sdl_event(void * userdata, SDL_Event * ev)
         SDL_GetMouseState(&mx, &my);
         pda_shell_wheel(ev->wheel.y, mx, my);
     }
+    /* the right button is not a thing in LVGL's mouse: the map reads it
+       here, to plan the route */
+    if(ev->type == SDL_MOUSEBUTTONDOWN && ev->button.button == SDL_BUTTON_RIGHT) {
+        pda_shell_right_click(ev->button.x, ev->button.y);
+    }
     return 1;   /* keep the event for everyone else */
 }
 

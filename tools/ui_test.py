@@ -619,6 +619,64 @@ def test_map_layers():
         stop(p, f)
 
 
+def test_waypoints():
+    print("13. the waypoints and the route", flush=True)
+    p, f, logpath = start({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478",
+                            "PDA_GPS_LON": "-16.9193"}, "waypoints")
+    try:
+        time.sleep(3.0)
+
+        def count(path, what):
+            """the pixels of a colour on the map (the title bar is 32)"""
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            w, h = im.size
+            n = 0
+            for y in range(69 + 32, h):
+                for x in range(w):
+                    r, g, b = px[x, y]
+                    if what == "red":       # the pin of a waypoint
+                        if r > 170 and g < 90 and b < 80:
+                            n += 1
+                    else:                   # the line of the route
+                        if r > 160 and 130 < g < 195 and b < 80:
+                            n += 1
+            return n
+
+        def right_click(x, y):
+            from Xlib import display, X
+            from Xlib.ext import xtest
+            focus_window()
+            d = display.Display()
+            sx, sy = OX + x, OY + y
+            xtest.fake_input(d, X.MotionNotify, x=sx, y=sy)
+            d.sync()
+            time.sleep(0.08)
+            xtest.fake_input(d, X.ButtonPress, 3)
+            d.sync()
+            time.sleep(0.08)
+            xtest.fake_input(d, X.ButtonRelease, 3)
+            d.sync()
+            time.sleep(0.4)
+
+        red0 = count(shot("wp_none"), "red")
+        line0 = count(shot("wp_none2"), "line")
+        right_click(300, 200)
+        red1 = count(shot("wp_one"), "red")
+        line1 = count(shot("wp_one2"), "line")
+        note(red1 > red0 + 40,
+             f"a right click puts a waypoint down ({red0} -> {red1} pixels)")
+        note(line1 > line0 + 60,
+             f"the route to it is drawn ({line0} -> {line1} pixels)")
+        right_click(300, 200)
+        red2 = count(shot("wp_gone"), "red")
+        note(red2 <= red0 + 20,
+             f"right clicking it again takes it away ({red1} -> {red2})")
+    finally:
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -632,6 +690,7 @@ TESTS = {
     "recenter": test_recenter,
     "caret": test_caret,
     "layers": test_map_layers,
+    "waypoints": test_waypoints,
 }
 
 def main():

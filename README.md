@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.0-alpha**
+**v0.2.1-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -31,6 +31,11 @@ on a desktop environment.
   *Areas* (white rings), *Traders* (a bag of coins), *Stashes* (yellow
   squares) and *Waypoints* (orange rings) on and off; the blue dot is where
   you are.
+- **Waypoints and a route**: **right click** on the map puts a waypoint
+  down (a red pin), right click on it again takes it away. A line is drawn
+  from where you are to the first waypoint, and from there to the next one.
+  When you get within 5 m of the first waypoint it goes away by itself and
+  the next one becomes the goal.
 - **The Traders layer is real**: every place that accepts bitcoin on Madeira
   comes from [BTC Map](https://btcmap.org) (the OpenStreetMap `currency:XBT`
   dataset) - 166 shops, cafés, pharmacies and hotels. They are drawn as a

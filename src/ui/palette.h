@@ -42,6 +42,7 @@ typedef enum {
     PDA_C_MAP_STASH,
     PDA_C_MAP_IMPORTANT,
     PDA_C_MAP_TRADER,
+    PDA_C_MAP_WAYPOINT,
     PDA_C_MAP_ME,
     PDA_C_CHAT_BG,
     PDA_C_CHAT_STRIP,
@@ -127,6 +128,7 @@ const char * pda_accent_name(int accent);
 #define PDA_MAP_STASH           pda_col(PDA_C_MAP_STASH)
 #define PDA_MAP_IMPORTANT       pda_col(PDA_C_MAP_IMPORTANT)
 #define PDA_MAP_TRADER          pda_col(PDA_C_MAP_TRADER)
+#define PDA_MAP_WAYPOINT        pda_col(PDA_C_MAP_WAYPOINT)
 #define PDA_MAP_ME              pda_col(PDA_C_MAP_ME)
 
 #define PDA_CHAT_BG             pda_col(PDA_C_CHAT_BG)

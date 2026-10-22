@@ -33,6 +33,14 @@
 #define MAP_VIEW_H  411
 #define MAP_VIEW_Y  69     /* the map's y offset inside the 800x480 screen */
 
+/* the route: how many waypoints the user can plan */
+#define MAX_WAYPOINTS 16
+/* the pin of a waypoint: a teardrop, this many pixels wide and tall */
+#define WP_PIN_W     14
+#define WP_PIN_H     19
+/* the pin of a waypoint goes away when the player is this close to it */
+#define WP_REACH_M   5.0
+
 
 #define SUB_COUNT   5
 #define SUB_PITCH   148
@@ -125,6 +133,11 @@ typedef struct {
     lv_obj_t * poi_card;           /* the card of a tapped merchant */
     lv_obj_t * poi_card_name;
     lv_obj_t * poi_card_info;
+    /* the route the user planned: right click puts a waypoint down, right
+       click on it takes it away again */
+    double wp_lon[MAX_WAYPOINTS];
+    double wp_lat[MAX_WAYPOINTS];
+    int wp_count;
     lv_timer_t * gps_timer;
     map_pack_t packs[MAX_PACKS];
     int n_packs;
@@ -241,6 +254,7 @@ static void draw_parallelogram(int ox, int oy, int w, int h, int slant,
 /* ---------- header painting ---------- */
 
 static void apply_layers(shell_t * sh);   /* the markers of a layer */
+static void route_reached(shell_t * sh);  /* a waypoint that is reached goes away */
 
 static void redraw_header(void)
 {
@@ -387,9 +401,12 @@ static void update_gps(lv_timer_t * timer)
         sh->marker_lon[sh->me_marker] = sh->gps.lon;
         sh->marker_lat[sh->me_marker] = sh->gps.lat;
     }
+    /* the waypoint that is reached goes away, and the next one is the goal */
+    route_reached(sh);
     if(getenv("PDA_DEBUG"))
-        fprintf(stderr, "[gps] lat=%.6f lon=%.6f valid=%d sim=%d marker=%d\n",
-                sh->gps.lat, sh->gps.lon, sh->gps.valid, sh->gps.simulated, sh->me_marker);
+        fprintf(stderr, "[gps] lat=%.6f lon=%.6f valid=%d sim=%d marker=%d waypoints=%d\n",
+                sh->gps.lat, sh->gps.lon, sh->gps.valid, sh->gps.simulated, sh->me_marker,
+                sh->wp_count);
     if(sh->me_marker >= 0) map_update(sh);   /* move the player marker */
     other_ui_status(PDA_VERSION, gps_status(&sh->gps));
     update_unread();
@@ -1050,6 +1067,107 @@ static void draw_poi_layer(shell_t * sh, int zn)
     }
 }
 
+/* ---------- the route (the user's own waypoints) ---------- */
+
+/* a line on the map, two pixels wide so it reads over the imagery */
+static void draw_line(shell_t * sh, int x0, int y0, int x1, int y1, uint16_t col)
+{
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for(int guard = 0; guard < 4096; guard++) {
+        view_px(sh, x0, y0, col);
+        view_px(sh, x0, y0 + 1, col);
+        if(x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if(e2 >= dy) { err += dy; x0 += sx; }
+        if(e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* the pin of a waypoint: a red teardrop with a hole in the head, its point
+   on the place itself */
+static void draw_waypoint_pin(shell_t * sh, int cx, int cy, uint16_t col)
+{
+    for(int j = 0; j < WP_PIN_H; j++) {
+        for(int i = 0; i < WP_PIN_W; i++) {
+            double dx = i + 0.5 - WP_PIN_W / 2.0;
+            double dy = j + 0.5 - 7.0;
+            double d = sqrt(dx * dx + dy * dy);
+            bool inside;
+            if(j <= 7) {
+                inside = (d <= 7.0);            /* the head */
+            }
+            else {
+                double t = (double)(j - 7) / (double)(WP_PIN_H - 1 - 7);
+                inside = (fabs(dx) <= 7.0 * (1.0 - t));   /* the tail */
+            }
+            if(!inside) continue;
+            if(d <= 2.6) continue;               /* the hole */
+            view_px(sh, cx + i - WP_PIN_W / 2, cy + j - (WP_PIN_H - 1), col);
+        }
+    }
+}
+
+/* where a point is on the map, in the map's own coordinates */
+static void geo_to_screen(shell_t * sh, int zn, double lon, double lat, int * x, int * y)
+{
+    double zscale = zn / 256.0;
+    *x = (int)((geo_w_x(lon) - geo_w_x(sh->lon_c)) * zscale + 400.0);
+    *y = (int)((geo_w_y(lat) - geo_w_y(sh->lat_c)) * zscale + 205.0);
+}
+
+/* the route: the player, then the waypoints in the order they were put
+   down, each with a line to the one before it */
+static void draw_route(shell_t * sh, int zn)
+{
+    if(sh->wp_count <= 0) return;
+
+    uint16_t line_col = rgb565_of(PDA_MSG_ACCENT);
+    uint16_t pin_col = rgb565_of(PDA_MAP_WAYPOINT);
+
+    int px, py;
+    geo_to_screen(sh, zn, sh->gps.lon, sh->gps.lat, &px, &py);
+    for(int i = 0; i < sh->wp_count; i++) {
+        int wx, wy;
+        geo_to_screen(sh, zn, sh->wp_lon[i], sh->wp_lat[i], &wx, &wy);
+        draw_line(sh, px, py, wx, wy, line_col);
+        px = wx;
+        py = wy;
+    }
+    for(int i = 0; i < sh->wp_count; i++) {
+        int wx, wy;
+        geo_to_screen(sh, zn, sh->wp_lon[i], sh->wp_lat[i], &wx, &wy);
+        draw_waypoint_pin(sh, wx, wy, pin_col);
+    }
+}
+
+/* the distance between two places, in metres */
+static double geo_dist_m(double lat1, double lon1, double lat2, double lon2)
+{
+    double dx = geo_w_x(lon2) - geo_w_x(lon1);
+    double dy = geo_w_y(lat2) - geo_w_y(lat1);
+    double latm = (lat1 + lat2) / 2.0 * M_PI / 180.0;
+    /* one world unit is this many metres at the equator */
+    double w_to_m = 360.0 / ((double)(1ull << REF_ZOOM) * 256.0) * 111320.0;
+    return sqrt(dx * dx + dy * dy) * w_to_m * cos(latm);
+}
+
+/* the waypoint that is reached is gone, and the next one takes over */
+static void route_reached(shell_t * sh)
+{
+    if(sh->wp_count <= 0) return;
+    if(!sh->gps.valid) return;
+    if(geo_dist_m(sh->gps.lat, sh->gps.lon, sh->wp_lat[0], sh->wp_lon[0]) >= WP_REACH_M)
+        return;
+
+    for(int j = 0; j < sh->wp_count - 1; j++) {
+        sh->wp_lon[j] = sh->wp_lon[j + 1];
+        sh->wp_lat[j] = sh->wp_lat[j + 1];
+    }
+    sh->wp_count--;
+}
+
 /* ---------- rendering ---------- */
 
 static void blit_level(shell_t * sh, const map_level_t * lv, int x0, int y0, int x1, int y1)
@@ -1206,6 +1324,9 @@ static void map_update(shell_t * sh)
     /* the traders of the BTC Map pack, under the names of the places */
     if(sh->sub_on[2]) draw_poi_layer(sh, zn);
 
+    /* the route the user planned */
+    draw_route(sh, zn);
+
     if(sh->n_packs) draw_map_labels(sh, zn);
 
     double wc = geo_w_x(sh->lon_c);
@@ -1297,6 +1418,44 @@ void pda_shell_wheel(int diff, int x, int y)
     int ay = y - MAP_VIEW_Y;
     if(ax < 0 || ax >= MAP_VIEW_W || ay < 0 || ay >= MAP_VIEW_H) return;
     map_zoom(sh, diff > 0 ? +1 : -1, ax, ay);
+}
+
+/* A right click on the map plans the route: it puts a waypoint down, and
+ * right clicking on a waypoint takes it away again. */
+void pda_shell_right_click(int x, int y)
+{
+    shell_t * sh = &g_sh;
+    if(sh->active_tab != 0) return;               /* the map is on screen */
+    int ax = x;
+    int ay = y - MAP_VIEW_Y;
+    if(ax < 0 || ax >= MAP_VIEW_W || ay < 0 || ay >= MAP_VIEW_H) return;
+
+    int zn = g_zoom_levels[sh->zoom_idx];
+    double zscale = zn / 256.0;
+    double wc = geo_w_x(sh->lon_c);
+    double wct = geo_w_y(sh->lat_c);
+
+    /* a waypoint that is there already goes away */
+    for(int i = 0; i < sh->wp_count; i++) {
+        int wx = (int)((geo_w_x(sh->wp_lon[i]) - wc) * zscale + 400.0);
+        int wy = (int)((geo_w_y(sh->wp_lat[i]) - wct) * zscale + 205.0);
+        int dx = wx - ax, dy = wy - ay;
+        if(dx * dx + dy * dy > 16 * 16) continue;
+        for(int j = i; j < sh->wp_count - 1; j++) {
+            sh->wp_lon[j] = sh->wp_lon[j + 1];
+            sh->wp_lat[j] = sh->wp_lat[j + 1];
+        }
+        sh->wp_count--;
+        map_update(sh);
+        return;
+    }
+
+    /* and a new one goes down where the cursor is */
+    if(sh->wp_count >= MAX_WAYPOINTS) return;
+    sh->wp_lon[sh->wp_count] = geo_lon_from_w(wc + (ax - 400) / zscale);
+    sh->wp_lat[sh->wp_count] = geo_lat_from_w(wct + (ay - 205) / zscale);
+    sh->wp_count++;
+    map_update(sh);
 }
 
 static void on_map_press(lv_event_t * e)
