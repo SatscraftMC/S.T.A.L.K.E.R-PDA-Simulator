@@ -568,8 +568,12 @@ def test_caret():
 
 def test_map_layers():
     print("12. the map layers", flush=True)
+    # a clean settings file: a route that is left over would turn its layer on
+    prefs = "/tmp/opencode/uitest/layers_prefs.conf"
+    if os.path.exists(prefs):
+        os.unlink(prefs)
     p, f, logpath = start({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478",
-                            "PDA_GPS_LON": "-16.9193"}, "layers")
+                            "PDA_GPS_LON": "-16.9193", "PDA_PREFS": prefs}, "layers")
     try:
         time.sleep(3.0)
 
@@ -621,8 +625,12 @@ def test_map_layers():
 
 def test_waypoints():
     print("13. the waypoints and the route", flush=True)
+    # a clean settings file: a route that is left over would be there already
+    prefs = "/tmp/opencode/uitest/waypoints_prefs.conf"
+    if os.path.exists(prefs):
+        os.unlink(prefs)
     p, f, logpath = start({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478",
-                            "PDA_GPS_LON": "-16.9193"}, "waypoints")
+                            "PDA_GPS_LON": "-16.9193", "PDA_PREFS": prefs}, "waypoints")
     try:
         time.sleep(3.0)
 
@@ -639,8 +647,8 @@ def test_waypoints():
                     if what == "red":       # the pin of a waypoint
                         if r > 170 and g < 90 and b < 80:
                             n += 1
-                    else:                   # the line of the route
-                        if r > 160 and 130 < g < 195 and b < 80:
+                    else:                   # the line of the route (light blue)
+                        if abs(r - 136) < 20 and abs(g - 216) < 20 and abs(b - 240) < 20:
                             n += 1
             return n
 
@@ -678,6 +686,7 @@ def test_waypoints():
         right_click(300, 200)
         on = count(shot("wp_layer_on"), "red")
         click_once(163 + 3 * 148 + 6, 42)     # the Waypoints button
+        time.sleep(0.4)                       # and let the map draw it
         off = count(shot("wp_layer_off"), "red")
         note(on > 40 and off <= 20,
              f"the Waypoints layer switches the route off ({on} -> {off})")
@@ -685,13 +694,53 @@ def test_waypoints():
         back = count(shot("wp_layer_back"), "red")
         note(back > 40, f"and on again ({back})")
 
-        # the button that takes the whole route away
-        click_once(8 + 50, 89 + 8)
+        # the button that takes the whole route away is in the column of the
+        # zoom buttons, and it is only there when the route is on the map
+        def accent(path, x0, y0, x1, y1):
+            """the pixels of the accent colour in that box (the title bar is 32)"""
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            n = 0
+            for y in range(y0 + 32, y1 + 32):
+                for x in range(x0, x1):
+                    r, g, b = px[x, y]
+                    if abs(r - 200) < 12 and abs(g - 160) < 12 and abs(b - 32) < 12:
+                        n += 1
+            return n
+
+        def text(path, x0, y0, x1, y1):
+            """the pixels of the text colour in that box"""
+            from PIL import Image
+            im = Image.open(path).convert("RGB")
+            px = im.load()
+            n = 0
+            for y in range(y0 + 32, y1 + 32):
+                for x in range(x0, x1):
+                    r, g, b = px[x, y]
+                    if abs(r - 152) < 12 and abs(g - 156) < 12 and abs(b - 144) < 12:
+                        n += 1
+            return n
+
+        BTN = (760, 69 + 266, 780, 69 + 286)     # the clear button's cross
+        click_once(770, 69 + 262 + 14)            # the clear button itself
         cleared = count(shot("wp_cleared"), "red")
         note(cleared <= 20, f"CLEAR takes the whole route away ({back} -> {cleared})")
+        btn0 = accent(shot("wp_btn0"), *BTN)
+        note(btn0 == 0, f"the clear button goes with the route ({btn0})")
+        right_click(300, 200)
+        btn1 = accent(shot("wp_btn1"), *BTN)
+        note(btn1 > 20, f"and comes with it ({btn1})")
+        click_once(163 + 3 * 148 + 6, 42)         # the Waypoints layer off
+        btn2 = accent(shot("wp_btn2"), *BTN)
+        note(btn2 == 0, f"and goes with the layer ({btn1} -> {btn2})")
+        click_once(163 + 3 * 148 + 6, 42)         # and on again
+
+        # the coordinates of the mouse and of the player
+        coord = text(shot("wp_coord"), 600, 69 + 2, 792, 69 + 28)
+        note(coord > 20, f"the coordinates are on the map ({coord} pixels)")
     finally:
         stop(p, f)
-
 
 TESTS = {
     "tabs": test_tabs,

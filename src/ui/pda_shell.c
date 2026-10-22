@@ -144,6 +144,8 @@ typedef struct {
     double wp_lat[MAX_WAYPOINTS];
     int wp_count;
     lv_obj_t * wp_clear_btn;       /* takes the whole route away */
+    lv_obj_t * coord_cursor_lbl;   /* where the mouse is */
+    lv_obj_t * coord_me_lbl;       /* where the player is */
     lv_timer_t * gps_timer;
     map_pack_t packs[MAX_PACKS];
     int n_packs;
@@ -166,6 +168,7 @@ typedef struct {
     bool sub_on[SUB_COUNT];
     uint32_t canvas_buf[HEADER_W * HEADER_H];
     uint32_t icon_buf[28 * 28];    /* the recenter button's target */
+    uint32_t clear_buf[28 * 28];   /* the clear button's target */
 } shell_t;
 
 static shell_t g_sh;
@@ -237,6 +240,23 @@ static void draw_recenter_icon(uint32_t * buf, int w, int h)
     }
 }
 
+/* the icon of the button that takes the route away: a cross */
+static void draw_clear_icon(uint32_t * buf, int w, int h)
+{
+    memset(buf, 0, sizeof(uint32_t) * (size_t)w * (size_t)h);
+    int cx = w / 2, cy = h / 2;
+    uint32_t col = argb_hex(PDA_MSG_ACCENT);
+    for(int d = -6; d <= 6; d++) {
+        for(int t = -1; t <= 1; t++) {
+            int x = cx + d, y = cy + d + t;
+            if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = col;
+            x = cx + d;
+            y = cy - d + t;
+            if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = col;
+        }
+    }
+}
+
 static void draw_parallelogram(int ox, int oy, int w, int h, int slant,
                                uint32_t fill, uint32_t stroke)
 {
@@ -263,6 +283,8 @@ static void apply_layers(shell_t * sh);   /* the markers of a layer */
 static void route_reached(shell_t * sh);  /* a waypoint that is reached goes away */
 static void waypoints_save(shell_t * sh); /* the waypoints in the settings file */
 static void waypoints_load(shell_t * sh); /* and back again */
+static void update_clear_button(shell_t * sh); /* the clear button shows up */
+static void update_coords(shell_t * sh);       /* the coordinates on the map */
 
 static void redraw_header(void)
 {
@@ -383,6 +405,19 @@ static void restyle_overlay(void)
     if(sh->pack_lbl)
         lv_obj_set_style_text_color(sh->pack_lbl, lv_color_hex(PDA_SUB_DOT_OFF),
                                     LV_PART_MAIN);
+    if(sh->wp_clear_btn) {
+        lv_obj_set_style_bg_color(sh->wp_clear_btn, lv_color_hex(PDA_ZOOM_BG), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(sh->wp_clear_btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(sh->wp_clear_btn, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(sh->wp_clear_btn, lv_color_hex(PDA_ZOOM_BORDER), LV_PART_MAIN);
+        lv_obj_set_style_radius(sh->wp_clear_btn, 2, LV_PART_MAIN);
+    }
+    if(sh->coord_cursor_lbl)
+        lv_obj_set_style_text_color(sh->coord_cursor_lbl, lv_color_hex(PDA_MSG_TEXT),
+                                    LV_PART_MAIN);
+    if(sh->coord_me_lbl)
+        lv_obj_set_style_text_color(sh->coord_me_lbl, lv_color_hex(PDA_MSG_TEXT),
+                                    LV_PART_MAIN);
 }
 
 /* ---------- the clock ---------- */
@@ -475,6 +510,8 @@ static void on_sub_click(lv_event_t * e)
     apply_layers(sh);
     /* the card belongs to the traders: it goes when they do */
     if(i == 2 && sh->poi_card) lv_obj_set_hidden(sh->poi_card, true);
+    /* and the route is the Waypoints layer */
+    if(i == 4) update_clear_button(sh);
     redraw_header();
     restyle_labels();
 }
@@ -1215,7 +1252,7 @@ static void route_reached(shell_t * sh)
     }
     sh->wp_count--;
     waypoints_save(sh);
-    if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, sh->wp_count == 0);
+    update_clear_button(sh);
 }
 
 /* ---------- rendering ---------- */
@@ -1497,7 +1534,7 @@ void pda_shell_right_click(int x, int y)
         }
         sh->wp_count--;
         waypoints_save(sh);
-        if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, sh->wp_count == 0);
+        update_clear_button(sh);
         map_update(sh);
         return;
     }
@@ -1514,7 +1551,7 @@ void pda_shell_right_click(int x, int y)
         restyle_labels();
     }
     waypoints_save(sh);
-    if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, false);
+    update_clear_button(sh);
     map_update(sh);
 }
 
@@ -1527,6 +1564,62 @@ static void on_clear_waypoints(lv_event_t * e)
     waypoints_save(sh);
     if(sh->wp_clear_btn) lv_obj_set_hidden(sh->wp_clear_btn, true);
     map_update(sh);
+}
+
+/* the clear button is only there when the route is on the map and there is
+   one to take away */
+static void update_clear_button(shell_t * sh)
+{
+    if(!sh->wp_clear_btn) return;
+    lv_obj_set_hidden(sh->wp_clear_btn, !(sh->sub_on[4] && sh->wp_count > 0));
+}
+
+/* where the mouse is and where the player is, in the top right corner */
+static void update_coords(shell_t * sh)
+{
+    if(!sh->coord_cursor_lbl || !sh->coord_me_lbl) return;
+
+    char lat[24], lon[24], line[96];
+
+    /* the mouse: LVGL's pointer knows where it is even when no button is
+       down (the SDL driver reads the mouse state all the time) */
+    lv_point_t p = { 0, 0 };
+    bool have = false;
+    lv_indev_t * indev = lv_indev_get_next(NULL);
+    while(indev) {
+        if(lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
+            lv_indev_get_point(indev, &p);
+            have = true;
+            break;
+        }
+        indev = lv_indev_get_next(indev);
+    }
+
+    int my = have ? p.y - MAP_VIEW_Y : -1;
+    if(have && p.x >= 0 && p.x < MAP_VIEW_W && my >= 0 && my < MAP_VIEW_H) {
+        double zscale = g_zoom_levels[sh->zoom_idx] / 256.0;
+        double wc = geo_w_x(sh->lon_c);
+        double wct = geo_w_y(sh->lat_c);
+        fmt_coord(geo_lat_from_w(wct + (my - 205) / zscale), lat, sizeof(lat));
+        fmt_coord(geo_lon_from_w(wc + (p.x - 400) / zscale), lon, sizeof(lon));
+        snprintf(line, sizeof(line), "cursor %s, %s", lat, lon);
+    }
+    else {
+        snprintf(line, sizeof(line), "cursor  -");
+    }
+    lv_label_set_text(sh->coord_cursor_lbl, line);
+
+    /* and the player */
+    fmt_coord(sh->gps.lat, lat, sizeof(lat));
+    fmt_coord(sh->gps.lon, lon, sizeof(lon));
+    snprintf(line, sizeof(line), "me     %s, %s", lat, lon);
+    lv_label_set_text(sh->coord_me_lbl, line);
+}
+
+static void coord_timer_cb(lv_timer_t * timer)
+{
+    LV_UNUSED(timer);
+    update_coords(&g_sh);
 }
 
 static void on_map_press(lv_event_t * e)
@@ -1762,26 +1855,49 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_style_text_font(sh->pack_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->pack_lbl, lv_color_hex(PDA_SUB_DOT_OFF), LV_PART_MAIN);
 
-    /* the button that takes the whole route away */
+    /* the button that takes the whole route away: it sits in the column of
+       the zoom buttons and looks like them */
+    draw_clear_icon(sh->clear_buf, 28, 28);
     lv_obj_t * clear = lv_button_create(overlay);
-    lv_obj_set_pos(clear, 8, 20);
-    lv_obj_set_size(clear, 104, 17);
-    lv_obj_set_style_bg_color(clear, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_pos(clear, 756, 262);
+    lv_obj_set_size(clear, 28, 28);
+    lv_obj_set_style_pad_all(clear, 0, LV_PART_MAIN);   /* the icon fills it */
+    lv_obj_t * cico = lv_canvas_create(clear);
+    lv_canvas_set_buffer(cico, sh->clear_buf, 28, 28, LV_COLOR_FORMAT_ARGB8888);
+    lv_obj_set_pos(cico, 0, 0);
+    lv_obj_set_size(cico, 28, 28);
+    lv_obj_add_event_cb(clear, on_clear_waypoints, LV_EVENT_CLICKED, NULL);
+    lv_no_transition(clear);
+    /* the same look as the zoom buttons */
+    lv_obj_set_style_bg_color(clear, lv_color_hex(PDA_ZOOM_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(clear, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(clear, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(clear, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_radius(clear, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(clear, 0, LV_PART_MAIN);
-    lv_no_transition(clear);
-    lv_obj_t * clear_lbl = lv_label_create(clear);
-    lv_label_set_text(clear_lbl, "CLEAR WAYPOINTS");
-    lv_obj_set_style_text_font(clear_lbl, &pda_font_mono_10, LV_PART_MAIN);
-    lv_obj_set_style_text_color(clear_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
-    lv_obj_center(clear_lbl);
-    lv_obj_add_event_cb(clear, on_clear_waypoints, LV_EVENT_CLICKED, NULL);
-    /* the button is only there when there is a route to take away */
-    lv_obj_set_hidden(clear, sh->wp_count == 0);
+    lv_obj_set_style_border_color(clear, lv_color_hex(PDA_ZOOM_BORDER), LV_PART_MAIN);
+    lv_obj_set_style_text_color(clear, lv_color_hex(PDA_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_radius(clear, 2, LV_PART_MAIN);
+    /* it is only there when the route is on the map and there is one */
+    lv_obj_set_hidden(clear, true);
     sh->wp_clear_btn = clear;
+
+    /* the coordinates, in the top right corner: where the mouse is and
+       where the player is */
+    sh->coord_cursor_lbl = lv_label_create(overlay);
+    lv_label_set_text(sh->coord_cursor_lbl, "cursor  -");
+    lv_obj_set_pos(sh->coord_cursor_lbl, 480, 4);
+    lv_obj_set_width(sh->coord_cursor_lbl, 312);
+    lv_label_set_long_mode(sh->coord_cursor_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(sh->coord_cursor_lbl, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(sh->coord_cursor_lbl, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sh->coord_cursor_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+
+    sh->coord_me_lbl = lv_label_create(overlay);
+    lv_label_set_text(sh->coord_me_lbl, "me");
+    lv_obj_set_pos(sh->coord_me_lbl, 480, 16);
+    lv_obj_set_width(sh->coord_me_lbl, 312);
+    lv_label_set_long_mode(sh->coord_me_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(sh->coord_me_lbl, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(sh->coord_me_lbl, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sh->coord_me_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
 
     /* the card of a merchant: it opens when one is tapped */
     lv_obj_t * card = lv_obj_create(overlay);
@@ -1816,6 +1932,11 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_add_event_cb(map, on_map_press, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(map, on_map_pressing, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(map, on_map_click, LV_EVENT_CLICKED, NULL);
+
+    /* the button that takes the route away, and the coordinates */
+    update_clear_button(sh);
+    update_coords(sh);
+    lv_timer_create(coord_timer_cb, 200, NULL);
 
     map_update(sh);   /* position markers into viewport coords */
 }
