@@ -34,14 +34,16 @@
  *   +--------------------------------------------------+
  *   | Settings    |  Info      |  NETWORKING            |
  *   | Connections |  Bitchat   |  BIT ......... ONLINE   |
- *   | User        |  F.I.P.S   |  NET ......... OFFLINE |
- *   | Extras      |  WiFi      |                        |
+ *   | Extras      |  F.I.P.S   |  NET ......... OFFLINE |
+ *   |             |  WiFi      |                        |
  *   +--------------------------------------------------+
  *
- * Settings and Extras are placeholders for now; Connections and User work.
+ * Settings, Connections and Extras are the sections; the User page lives
+ * under Settings now. Every one of them works, the Extras page is still
+ * empty.
  */
 
-#define PAGE_COUNT   4
+#define PAGE_COUNT   3
 #define NAV_W        160          /* the sections column */
 #define NAV_H        22
 #define NAV_PITCH    26
@@ -77,21 +79,22 @@
 #define MESH_H       250
 #define MESH_NODES   8
 
-enum { PAGE_SETTINGS = 0, PAGE_CONNECTIONS = 1, PAGE_USER = 2, PAGE_EXTRAS = 3 };
+enum { PAGE_SETTINGS = 0, PAGE_CONNECTIONS = 1, PAGE_EXTRAS = 2 };
 
 /* the sections and their sub tabs */
 static const tr_id_t g_page_ids[PAGE_COUNT] = {
-    TR_SEC_SETTINGS, TR_SEC_CONNECTIONS, TR_SEC_USER, TR_SEC_EXTRAS
+    TR_SEC_SETTINGS, TR_SEC_CONNECTIONS, TR_SEC_EXTRAS
 };
 
 static const tr_id_t g_sub_ids[PAGE_COUNT][8] = {
-    { TR_SUB_GENERAL, TR_SUB_ADVANCED, TR_SUB_LANGUAGE, TR_SUB_THEMES, TR_SUB_SYSTEM },
+    { TR_SUB_GENERAL, TR_SUB_ADVANCED, TR_SUB_LANGUAGE, TR_SUB_THEMES, TR_SUB_SYSTEM,
+      TR_SUB_USER },
     { TR_SUB_INFO, TR_SUB_BITCHAT, TR_SUB_FIPS, TR_SUB_WIFI, TR_SUB_GPS },
-    { 0 },
     { 0 },
 };
 
 static void other_ui_refresh(void);
+static void page_user(void);
 static void no_theme_transition(lv_obj_t * o);
 static void other_ui_on_name(lv_event_t * e);
 static void other_ui_on_room(lv_event_t * e);
@@ -818,7 +821,8 @@ static void page_settings(int sub)
         case 1: page_advanced(); break;
         case 2: page_language(); break;
         case 3: page_themes(); break;
-        default: page_system(); break;
+        case 4: page_system(); break;
+        default: page_user(); break;
     }
 }
 
@@ -958,7 +962,6 @@ static void build_content(void)
             default: page_gps(); break;
         }
     }
-    else if(g_ui.page == PAGE_USER) page_user();
     else page_extras();
 
     other_ui_refresh();

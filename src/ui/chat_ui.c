@@ -25,16 +25,25 @@
  *
  *   +-------------------------------------------------------------+
  *   | SECTOR   mesh 2425 / relay 1.2.3.4:7788     BIT  FIPS  NET  |
+ *   | SEND ON   [BIT] [FIPS] [NET]                             |
  *   +-------------------------------------------------------------+
- *   | 12:04  ROOK     anyone got the drop coords?                 |
  *   | 12:05  ME       not yet, rain again                        |
+ *   | 12:04  ROOK     anyone got the drop coords?                 |
  *   |-------------------------------------------------------------|
  *   | [ type a message...                                ] [ SEND ] |
  *   +-------------------------------------------------------------+
+ *
+ * The newest message is at the top of the log, and the row under the strip
+ * says which carriers a message goes out on - one, two or all of them.
  */
 
 #define LIST_W        800
 #define STRIP_H       26
+#define PICK_Y        30      /* the row with the carrier buttons */
+#define PICK_H        18
+#define PICK_X        90      /* where the buttons start */
+#define PICK_W        58
+#define PICK_GAP      4
 #define COMPOSE_H     40
 #define ROW_MAX       120
 #define TEXT_X        152
@@ -44,9 +53,9 @@
 #define TAG_X         108
 #define TAG_W         42
 #define FRAME_X       6
-#define FRAME_Y       32
+#define FRAME_Y       50
 #define FRAME_W       788
-#define FRAME_H       407
+#define FRAME_H       389
 #define BACK_W        800
 #define BACK_H        452
 
@@ -56,11 +65,13 @@ typedef struct {
     lv_obj_t * room_lbl;
     lv_obj_t * status_lbl;
     lv_obj_t * badge[CHAT_TRANSPORT_MAX];
+    lv_obj_t * pick_btn[CHAT_TRANSPORT_MAX];
+    lv_obj_t * pick_lbl[CHAT_TRANSPORT_MAX];
     lv_obj_t * input;
     lv_timer_t * timer;
     int rendered;         /* messages already drawn */
     int rows;              /* rows currently in the list */
-    int y;                 /* running y of the next row */
+    int y;                 /* the height of all the rows together */
     int row_h[ROW_MAX];    /* height of each row, for the scroll-back */
 } chat_ui_t;
 
@@ -68,6 +79,7 @@ static chat_ui_t g_ui;
 
 static void chat_tick(lv_timer_t * timer);
 static void refresh(void);
+static void scroll_to_top(void);
 
 /* the panel is rebuilt when the theme changes: the old timer has to go */
 void chat_ui_destroy(void)
@@ -101,20 +113,20 @@ void chat_ui_clear(void)
     g_ui.rows = 0;
     g_ui.y = 0;
     g_ui.rendered = 0;
+    scroll_to_top();
     refresh();
 }
 
-static void scroll_to_bottom(void)
+static void scroll_to_top(void)
 {
-    lv_obj_scroll_to_view(g_ui.list, LV_ANIM_OFF);
+    lv_obj_scroll_to_y(g_ui.list, 0, LV_ANIM_OFF);
 }
 
 /* is the log showing its newest line? */
-static bool at_bottom(void)
+static bool at_top(void)
 {
     int y = lv_obj_get_scroll_y(g_ui.list);
-    int max = lv_obj_get_scroll_bottom(g_ui.list);
-    return y >= max - 4;
+    return y <= 4;
 }
 
 static void add_row(const chat_msg_t * m)
@@ -146,25 +158,20 @@ static void add_row(const chat_msg_t * m)
     int text_x = show_time ? TEXT_X : TEXT_X - 44;
 
     if(g_ui.rows >= ROW_MAX) {
-        /* drop the oldest row and pull the rest up */
-        lv_obj_t * child = lv_obj_get_child(g_ui.list, 0);
-        if(child) {
-            lv_kill_tree(child);
-            lv_obj_delete(child);
+        /* the oldest row goes: it is the first one that was made, and with
+           the newest at the top it is the one at the bottom */
+        lv_obj_t * old = lv_obj_get_child(g_ui.list, 0);
+        if(old) {
+            lv_kill_tree(old);
+            lv_obj_delete(old);
         }
         for(int i = 0; i < g_ui.rows - 1; i++) g_ui.row_h[i] = g_ui.row_h[i + 1];
+        g_ui.y -= g_ui.row_h[g_ui.rows - 1];
         g_ui.rows--;
-        int yy = 0;
-        for(int i = 0; i < g_ui.rows; i++) {
-            lv_obj_t * c = lv_obj_get_child(g_ui.list, i);
-            if(c) lv_obj_set_pos(c, 0, yy);
-            yy += g_ui.row_h[i];
-        }
-        g_ui.y = yy;
     }
 
     lv_obj_t * row = lv_obj_create(g_ui.list);
-    lv_obj_set_pos(row, 0, g_ui.y);
+    lv_obj_set_pos(row, 0, 0);
     lv_obj_set_size(row, lv_pct(100), 20);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
@@ -209,6 +216,8 @@ static void add_row(const chat_msg_t * m)
             for(int i = 0; i < chat_transport_count(); i++) {
                 const chat_transport_t * tr = chat_transport_get(i);
                 if(!tr || tr->state != CHAT_CARRIER_ONLINE) continue;
+                /* only the carriers the user wants are used */
+                if(!chat_carrier_enabled(i)) continue;
                 if(tags[0]) strncat(tags, " ", sizeof(tags) - strlen(tags) - 1);
                 strncat(tags, tr->tag, sizeof(tags) - strlen(tags) - 1);
             }
@@ -239,6 +248,14 @@ static void add_row(const chat_msg_t * m)
     if(th <= 0) th = 14;
     lv_obj_set_height(row, th + 6);
 
+    /* the newest message is at the top: the rows that are already there
+       move down by the height of the new one */
+    int h = th + 6;
+    for(int i = 0; i < g_ui.rows; i++) {
+        lv_obj_t * c = lv_obj_get_child(g_ui.list, i);
+        if(c) lv_obj_set_pos(c, 0, lv_obj_get_y(c) + h);
+    }
+
     g_ui.row_h[g_ui.rows] = th + 6;
     g_ui.rows++;
     g_ui.y += th + 6;
@@ -246,11 +263,11 @@ static void add_row(const chat_msg_t * m)
     /* the hairline between the messages */
     grit_rule(row, 0, th + 5, lv_pct(100), false, PDA_RULE);
 }
-
 static void refresh(void)
 {
     int count = chat_count();
-    bool stick = at_bottom();
+    bool stick = at_top();
+    int old_y = lv_obj_get_scroll_y(g_ui.list);
     if(count < g_ui.rendered) {     /* the log was trimmed: rebuild */
         lv_kill_tree(g_ui.list);
         lv_obj_clean(g_ui.list);
@@ -259,14 +276,22 @@ static void refresh(void)
         g_ui.rendered = 0;
     }
     bool show_system = prefs_bool("show_system", true);
+    int added = 0;
     for(int i = g_ui.rendered; i < count; i++) {
         const chat_msg_t * m = chat_get(i);
         if(!m) continue;
         if(m->kind == CHAT_KIND_SYS && !show_system) continue;
+        int before = g_ui.y;
         add_row(m);
+        added += g_ui.y - before;
     }
     g_ui.rendered = count;
-    if(stick && count > 0) scroll_to_bottom();
+    if(added > 0) {
+        /* the new rows are at the top: the view stays where it was, and
+           the newest one is in sight when the log was at the top */
+        if(stick) lv_obj_scroll_to_y(g_ui.list, 0, LV_ANIM_OFF);
+        else lv_obj_scroll_to_y(g_ui.list, old_y + added, LV_ANIM_OFF);
+    }
 
     /* the carrier strip */
     char status[128] = "";
@@ -334,9 +359,124 @@ static void on_send_click(lv_event_t * e)
     do_send();
 }
 
+/* ---------- which carriers a message goes out on ---------- */
+
+/* the setting a carrier is remembered under ("send_bit", "send_fips", ...) */
+static void pick_key(int idx, char * out, size_t outn)
+{
+    const chat_transport_t * tr = chat_transport_get(idx);
+    char tag[16] = "";
+    if(tr) snprintf(tag, sizeof(tag), "%s", tr->tag);
+    for(char * p = tag; *p; p++)
+        if(*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    snprintf(out, outn, "send_%s", tag);
+}
+
+/* the buttons: the tag is in the colour of the carrier's state, and the
+   box says whether the carrier is used */
+static void restyle_pick(void)
+{
+    for(int i = 0; i < CHAT_TRANSPORT_MAX; i++) {
+        if(!g_ui.pick_btn[i]) continue;
+        const chat_transport_t * tr = chat_transport_get(i);
+        bool on = chat_carrier_enabled(i);
+        uint32_t col = tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN;
+        lv_obj_set_style_border_color(g_ui.pick_btn[i],
+                                       lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_EDGE),
+                                       LV_PART_MAIN);
+        lv_obj_set_style_bg_color(g_ui.pick_btn[i],
+                                  lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_BG),
+                                  LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(g_ui.pick_btn[i], on ? LV_OPA_20 : LV_OPA_TRANSP,
+                                LV_PART_MAIN);
+        if(g_ui.pick_lbl[i]) {
+            lv_obj_set_style_text_color(g_ui.pick_lbl[i],
+                                        lv_color_hex(on ? col : PDA_MSG_SYS),
+                                        LV_PART_MAIN);
+        }
+    }
+}
+
+static void on_pick_click(lv_event_t * e)
+{
+    int i = (int)(lv_intptr_t)lv_event_get_user_data(e);
+    if(i < 0 || i >= CHAT_TRANSPORT_MAX) return;
+    bool on = !chat_carrier_enabled(i);
+    chat_set_carrier_enabled(i, on);
+    char key[24];
+    pick_key(i, key, sizeof(key));
+    prefs_set_bool(key, on);
+    restyle_pick();
+    if(getenv("PDA_DEBUG")) {
+        const chat_transport_t * tr = chat_transport_get(i);
+        fprintf(stderr, "[chat] sending on %s: %s\n", tr ? tr->tag : "?", on ? "yes" : "no");
+    }
+}
+
+/* the row under the strip: one button per carrier */
+static void build_pick(lv_obj_t * root, lv_group_t * group)
+{
+    lv_obj_t * pick = lv_obj_create(root);
+    lv_obj_set_pos(pick, 0, PICK_Y);
+    lv_obj_set_size(pick, LIST_W, PICK_H);
+    lv_obj_set_style_bg_opa(pick, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(pick, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(pick, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(pick, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(pick, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(pick, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scroll_dir(pick, LV_DIR_NONE);
+    lv_obj_set_scrollable(pick, false);
+
+    lv_obj_t * lbl = lv_label_create(pick);
+    lv_label_set_text(lbl, "SEND ON");
+    lv_obj_set_pos(lbl, 24, 4);
+    lv_obj_set_style_text_font(lbl, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(lbl, 0, LV_PART_MAIN);
+
+    int n = chat_transport_count();
+    for(int i = 0; i < n && i < CHAT_TRANSPORT_MAX; i++) {
+        const chat_transport_t * tr = chat_transport_get(i);
+        if(!tr) continue;
+
+        lv_obj_t * b = lv_button_create(pick);
+        lv_obj_set_pos(b, PICK_X + i * (PICK_W + PICK_GAP), 1);
+        lv_obj_set_size(b, PICK_W, 15);
+        lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+        lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+        lv_no_transition(b);
+
+        lv_obj_t * l = lv_label_create(b);
+        lv_label_set_text(l, tr->tag);
+        lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
+        lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+        lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
+        lv_obj_center(l);
+
+        lv_obj_add_event_cb(b, on_pick_click, LV_EVENT_CLICKED, (void *)(lv_intptr_t)i);
+        g_ui.pick_btn[i] = b;
+        g_ui.pick_lbl[i] = l;
+        if(group) lv_group_add_obj(group, b);
+    }
+    restyle_pick();
+}
+
 lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 {
     memset(&g_ui, 0, sizeof(g_ui));
+
+    /* which carriers a message goes out on - the setting is remembered */
+    int ntr = chat_transport_count();
+    for(int i = 0; i < ntr && i < CHAT_TRANSPORT_MAX; i++) {
+        char key[24];
+        pick_key(i, key, sizeof(key));
+        chat_set_carrier_enabled(i, prefs_bool(key, true));
+    }
 
     lv_obj_t * root = lv_obj_create(parent);
     lv_obj_set_pos(root, 0, 0);
@@ -402,6 +542,9 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
 
     /* the rule under the strip */
     grit_rule(root, 6, STRIP_H + 2, 788, false, PDA_RULE);
+
+    /* --- the row that says which carriers a message goes out on --- */
+    build_pick(root, group);
 
     /* --- the frame: the log and the compose row live in it --- */
     lv_obj_t * frame = grit_frame(root, FRAME_X, FRAME_Y, FRAME_W, FRAME_H, PDA_FRAME);

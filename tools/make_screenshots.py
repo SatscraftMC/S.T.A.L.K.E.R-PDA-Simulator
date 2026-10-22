@@ -97,7 +97,7 @@ def main():
         "other-connections.png")
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1", "PDA_OTHER_SUB": "2"},
         "other-fips.png")
-    run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2", "PDA_OTHER_SUB": "0"},
+    run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"},
         "other-user.png")
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "0"},
         "other-settings.png")

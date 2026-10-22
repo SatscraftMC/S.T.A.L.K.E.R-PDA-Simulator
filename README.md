@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.2.5-alpha**
+**v0.2.6-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a
 group chat that works over the local mesh, the FIPS mesh and the internet,
@@ -54,6 +54,12 @@ on a desktop environment.
   every medium that is up - the local mesh, the FIPS mesh and the internet -
   and everything that comes in shows up in the same log, tagged with the
   carrier it arrived on.
+- **The carrier picker**: the row under the strip in the Messages tab has one
+  button per carrier. Click one and the message stops going out on it - one
+  carrier, two or all three. A carrier that is off still *receives*; it just
+  does not send. The choice is remembered.
+- **The newest message is at the top** of the log, like a chat that follows
+  the conversation down. The log scrolls back for the older lines.
 - **A map of the mesh** on *Other -> Connections -> Bitchat*: this device in
   the middle and the devices it has heard around it, with their names under
   the nodes and a line to each of them - the way the bitchat app draws it.
@@ -89,6 +95,16 @@ on a desktop environment.
 ## The Messages tab - one room, three carriers
 
 ![the messages tab](docs/screenshots/messages.png)
+
+The row under the strip says **SEND ON** and has one button per carrier:
+click a button and the messages stop going out on that carrier - the mesh
+only, the mesh and the internet, all three, whatever you like. The text of
+the button is in the colour of the carrier's state (green up, grey looking,
+red down) and the box is lit when the carrier is used. The choice is
+remembered in the settings file (`send_bit`, `send_fips`, `send_net`).
+
+The log has the **newest message at the top**; the older ones are below it
+and the log scrolls back for them.
 
 Everything rides the same envelope on all three carriers:
 
@@ -154,14 +170,14 @@ one that only has to *send* works with the firewall closed, the one that has
 to *receive* does not - which is why the mesh used to work in one direction
 only.
 
-## The Other tab - settings, connections, user
+## The Other tab - settings, connections, extras
 
 ![the other tab](docs/screenshots/other-connections.png)
 
-A column of sections on the left (Settings, Connections, User, Extras), a
+A column of sections on the left (Settings, Connections, Extras), a
 strip of sub-tabs across the top of the pane, the page below that. The
 sub-tabs belong to the section: *Settings* has General / Advanced / Language /
-Themes / System, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS.
+Themes / System / User, *Connections* has Info / Bitchat / F.I.P.S / WiFi / GPS.
 
 **Connections → Info** is the one that matters: it says whether each system
 is up - **green** when it is, **grey** while it is trying and **red** when
@@ -169,9 +185,9 @@ it is not there. The other *Connections* pages show the settings of that system
 (the mesh channel, port and bridge, the fips sockets and the FSP port, the
 WiFi interface and its address, the live GPS data).
 
-**User** holds the personalisation: the name other devices see on your
-messages and the room you talk in (both editable, both remembered), and the
-switches for what the message log shows. The carrier badges in the top right
+**Settings → User** holds the personalisation: the name other devices see on
+your messages and the room you talk in (both editable, both remembered), and
+the switches for what the message log shows. The carrier badges in the top right
 of the Messages tab use the same colours: green, grey, red.
 
 **Settings** holds the device's own settings - every one of them works, and

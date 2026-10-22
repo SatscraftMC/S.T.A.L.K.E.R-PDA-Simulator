@@ -353,6 +353,55 @@ def test_fips():
             mock.kill()
 
 
+def test_carrier_picker():
+    print("the carrier picker - which carriers a message goes out on", flush=True)
+    # The Messages tab has a row of buttons: one per carrier. A carrier that
+    # is off still receives, it just does not send. With NET off the message
+    # must not reach the relay.
+    port = free_port()
+    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
+                              "--port", str(port), "-v"],
+                             stdout=open(os.path.join(LOGDIR, "chat_pick_relay.log"), "w"),
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+    peer.settimeout(2.0)
+
+    prefs = os.path.join(LOGDIR, "chat_pick_prefs.conf")
+    with open(prefs, "w") as f:
+        f.write("send_net = 0\n")
+
+    app, applog, log_a = start_app("pick", {
+        "PDA_RELAY_HOST": "127.0.0.1",
+        "PDA_RELAY_PORT": str(port),
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_NAME": "Satscraft",
+        "PDA_PREFS": prefs,
+        "PDA_TEST_SEND": "only the mesh, please",
+    })
+    try:
+        time.sleep(4.0)
+        got = False
+        end = time.time() + 4
+        while time.time() < end and not got:
+            try:
+                line = peer.recv(4096)
+            except socket.timeout:
+                break
+            if b"only the mesh, please" in line:
+                got = True
+        note(not got, "the message did not go out on the carrier that is off")
+    finally:
+        stop_app(app, applog)
+        peer.close()
+        relay.terminate()
+        try:
+            relay.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
+
+
 def main():
     if not os.path.exists(APP):
         print("build the app first: ./build.sh")
@@ -360,6 +409,8 @@ def main():
     os.makedirs(LOGDIR, exist_ok=True)
 
     test_net(free_port())
+    print()
+    test_carrier_picker()
     print()
     test_bit()
     print()

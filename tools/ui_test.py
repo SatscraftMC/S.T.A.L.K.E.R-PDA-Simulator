@@ -207,8 +207,8 @@ def test_tabs():
 
 def test_other_pages():
     print("2. every Other page comes up", flush=True)
-    pages = [(0, s) for s in range(5)] + [(1, s) for s in range(5)] + \
-            [(2, 0), (3, 0)]
+    pages = [(0, s) for s in range(6)] + [(1, s) for s in range(5)] + \
+            [(2, 0)]
     for page, sub in pages:
         p, f, logpath = start({"PDA_START_TAB": "6",
                                 "PDA_OTHER_PAGE": str(page),
@@ -226,7 +226,7 @@ def test_name_save():
     if os.path.exists(PREFS):
         os.unlink(PREFS)
 
-    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "name")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"}, "name")
     time.sleep(2.8)
     try:
         # the name field (the content starts at app x=306, the value column
@@ -249,7 +249,7 @@ def test_name_save():
         stop(p, f)
 
     # and it survives a restart
-    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "name2")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"}, "name2")
     time.sleep(2.6)
     try:
         path = shot("name_restart")
@@ -265,7 +265,7 @@ def test_settings_file():
     # a broken file must not kill the app
     with open(PREFS, "w") as f:
         f.write("this is not a setting\n= = =\nname\n")
-    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "broken")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"}, "broken")
     time.sleep(2.6)
     note(app_alive(p, logpath), "a broken settings file does not kill the app")
     stop(p, f)
@@ -283,7 +283,7 @@ def test_settings_file():
     # a silly long name
     with open(PREFS, "w") as f:
         f.write("name = " + ("A" * 400) + "\n")
-    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "long")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"}, "long")
     time.sleep(2.6)
     ok = app_alive(p, logpath)
     shot("longname")
@@ -324,18 +324,20 @@ def test_hard_use():
             click(SUB_X, SUB_Y0 + SUB_PITCH * sub)
         time.sleep(0.5)
         # and the nav column
-        for i in range(4):
+        for i in range(3):
             click(NAV_X, NAV_Y0 + NAV_PITCH * i)
         time.sleep(0.5)
         # save a name and walk away from the page while it flashes
-        click(NAV_X, NAV_Y0 + NAV_PITCH * 2)     # the User page
+        click(NAV_X, NAV_Y0 + NAV_PITCH * 0)     # the Settings section
+        time.sleep(0.3)
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 5)     # the User page
         time.sleep(0.3)
         click(NAME_X, NAME_Y)       # the name field
         type_text("Satscraft")
         click(SAVE_X, NAME_Y)       # SAVE
         click(NAV_X, NAV_Y0 + NAV_PITCH * 1)     # and straight to another page
         time.sleep(1.8)             # long enough for the flash to fire
-        click(NAV_X, NAV_Y0 + NAV_PITCH * 2)     # and back again
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 5)     # and back again
         time.sleep(0.4)
         ok = app_alive(p, logpath)
         shot("hard")
@@ -519,7 +521,7 @@ xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.4)
 
 def test_caret():
     print("11. the text caret", flush=True)
-    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "2"}, "caret")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "5"}, "caret")
     try:
         time.sleep(3.0)
 

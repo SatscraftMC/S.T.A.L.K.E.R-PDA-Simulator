@@ -18,6 +18,10 @@ static int s_head = 0;      /* index of the oldest message */
 static int s_count = 0;
 static int s_unread = 0;
 
+/* the carriers a message goes out on - the user picks them in the Messages
+   tab. All of them are on to begin with. */
+static bool s_enabled[CHAT_TRANSPORT_MAX];
+
 static chat_transport_t * s_tr[CHAT_TRANSPORT_MAX];
 static int s_n_tr = 0;
 
@@ -95,6 +99,19 @@ void chat_add_transport(chat_transport_t * t)
     s_tr[s_n_tr++] = t;
 }
 
+/* which carriers a message goes out on */
+void chat_set_carrier_enabled(int index, bool on)
+{
+    if(index < 0 || index >= CHAT_TRANSPORT_MAX) return;
+    s_enabled[index] = on;
+}
+
+bool chat_carrier_enabled(int index)
+{
+    if(index < 0 || index >= CHAT_TRANSPORT_MAX) return false;
+    return s_enabled[index];
+}
+
 const char * chat_carrier_state_name(chat_carrier_state_t st)
 {
     switch(st) {
@@ -135,6 +152,9 @@ const chat_transport_t * chat_transport_get(int i)
 
 void chat_init(void)
 {
+    /* every carrier sends to begin with */
+    for(int i = 0; i < CHAT_TRANSPORT_MAX; i++) s_enabled[i] = true;
+
     /* the environment wins over the saved settings: it is the explicit one */
     const char * name = getenv("PDA_NAME");
     if(name && *name) chat_set_identity(name);
@@ -309,6 +329,8 @@ bool chat_send(const char * text)
     for(int i = 0; i < s_n_tr; i++) {
         chat_transport_t * t = s_tr[i];
         if(t->state != CHAT_CARRIER_ONLINE || !t->send) continue;
+        /* the carriers the user does not want are left out */
+        if(!chat_carrier_enabled(i)) continue;
         if(t->send(t, text, id)) any = true;
     }
 

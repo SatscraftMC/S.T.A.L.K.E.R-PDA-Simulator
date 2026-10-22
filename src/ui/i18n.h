@@ -31,6 +31,7 @@ typedef enum {
     TR_SUB_WIFI,
     TR_SUB_GPS,
     TR_SUB_SYSTEM,
+    TR_SUB_USER,
     TR_SEND,
     TR_SAVE,
     TR_SAVED,

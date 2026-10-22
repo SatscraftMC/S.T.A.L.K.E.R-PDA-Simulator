@@ -70,6 +70,12 @@ void chat_poll(void);
    local log. Returns false when there was nothing to send. */
 bool chat_send(const char * text);
 
+/* Which carriers a message goes out on. The user picks them in the
+   Messages tab - one carrier, two or all of them. A carrier that is off
+   still receives; it just does not send. */
+void chat_set_carrier_enabled(int index, bool on);
+bool chat_carrier_enabled(int index);
+
 int chat_count(void);
 const chat_msg_t * chat_get(int i);          /* 0 = oldest */
 const chat_msg_t * chat_newest(void);
