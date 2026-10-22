@@ -24,8 +24,8 @@
  * the compose row at the bottom of it.
  *
  *   +-------------------------------------------------------------+
- *   | SECTOR   mesh 2425 / relay 1.2.3.4:7788     BIT  FIPS  NET  |
- *   | SEND ON   [BIT] [FIPS] [NET]                             |
+ *   | SECTOR   mesh 2425 / relay 1.2.3.4:7788  SEND ON (BIT) (F) |
+ *   |                                            BIT  FIPS  NET  |
  *   +-------------------------------------------------------------+
  *   | 12:05  ME       not yet, rain again                        |
  *   | 12:04  ROOK     anyone got the drop coords?                 |
@@ -33,17 +33,17 @@
  *   | [ type a message...                                ] [ SEND ] |
  *   +-------------------------------------------------------------+
  *
- * The newest message is at the top of the log, and the row under the strip
- * says which carriers a message goes out on - one, two or all of them.
+ * The newest message is at the top of the log, and the buttons in the
+ * strip say which carriers a message goes out on - one, two or all of them.
  */
 
 #define LIST_W        800
 #define STRIP_H       26
-#define PICK_Y        30      /* the row with the carrier buttons */
+#define PICK_W        66      /* a carrier button */
 #define PICK_H        18
-#define PICK_X        90      /* where the buttons start */
-#define PICK_W        58
 #define PICK_GAP      4
+#define PICK_RIGHT    636     /* where the buttons end (the badges are at 646) */
+#define DISC_N        12      /* the little disc in the button */
 #define COMPOSE_H     40
 #define ROW_MAX       120
 #define TEXT_X        152
@@ -53,9 +53,9 @@
 #define TAG_X         108
 #define TAG_W         42
 #define FRAME_X       6
-#define FRAME_Y       50
+#define FRAME_Y       32
 #define FRAME_W       788
-#define FRAME_H       389
+#define FRAME_H       407
 #define BACK_W        800
 #define BACK_H        452
 
@@ -67,6 +67,8 @@ typedef struct {
     lv_obj_t * badge[CHAT_TRANSPORT_MAX];
     lv_obj_t * pick_btn[CHAT_TRANSPORT_MAX];
     lv_obj_t * pick_lbl[CHAT_TRANSPORT_MAX];
+    lv_obj_t * pick_disc[CHAT_TRANSPORT_MAX];
+    uint32_t pick_buf[CHAT_TRANSPORT_MAX][DISC_N * DISC_N];
     lv_obj_t * input;
     lv_timer_t * timer;
     int rendered;         /* messages already drawn */
@@ -361,6 +363,37 @@ static void on_send_click(lv_event_t * e)
 
 /* ---------- which carriers a message goes out on ---------- */
 
+/* the ARGB value of a palette colour, for the little canvas */
+static uint32_t pick_argb(uint32_t rgb)
+{
+    return 0xFF000000u | (rgb & 0xFFFFFFu);
+}
+
+/* the little disc in the button: the same as the markers of the map's layer
+   strip - a filled disc with a smaller dot in it, big when the carrier is
+   used and small when it is not */
+static void draw_pick_disc(lv_obj_t * canvas, uint32_t * buf, bool on)
+{
+    int cx = DISC_N / 2, cy = DISC_N / 2;
+    memset(buf, 0, sizeof(uint32_t) * (size_t)DISC_N * DISC_N);
+
+    for(int j = cy - 5; j <= cy + 5; j++) {
+        for(int i = cx - 5; i <= cx + 5; i++) {
+            int dx = i - cx, dy = j - cy;
+            if(dx * dx + dy * dy <= 25) buf[j * DISC_N + i] = pick_argb(PDA_SUB_DISC);
+        }
+    }
+    int r = on ? 3 : 2;
+    for(int j = cy - r; j <= cy + r; j++) {
+        for(int i = cx - r; i <= cx + r; i++) {
+            int dx = i - cx, dy = j - cy;
+            if(dx * dx + dy * dy <= r * r)
+                buf[j * DISC_N + i] = pick_argb(on ? PDA_SUB_DOT_ON : PDA_SUB_DOT_OFF);
+        }
+    }
+    if(canvas) lv_obj_invalidate(canvas);
+}
+
 /* the setting a carrier is remembered under ("send_bit", "send_fips", ...) */
 static void pick_key(int idx, char * out, size_t outn)
 {
@@ -372,28 +405,19 @@ static void pick_key(int idx, char * out, size_t outn)
     snprintf(out, outn, "send_%s", tag);
 }
 
-/* the buttons: the tag is in the colour of the carrier's state, and the
-   box says whether the carrier is used */
+/* the buttons: the disc says whether the carrier is used and the tag is
+   bright or dim with it - the same look as the layer strip of the map */
 static void restyle_pick(void)
 {
     for(int i = 0; i < CHAT_TRANSPORT_MAX; i++) {
         if(!g_ui.pick_btn[i]) continue;
-        const chat_transport_t * tr = chat_transport_get(i);
         bool on = chat_carrier_enabled(i);
-        uint32_t col = tr ? lv_carrier_color(tr->state) : PDA_CARRIER_DOWN;
-        lv_obj_set_style_border_color(g_ui.pick_btn[i],
-                                       lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_EDGE),
-                                       LV_PART_MAIN);
-        lv_obj_set_style_bg_color(g_ui.pick_btn[i],
-                                  lv_color_hex(on ? PDA_MSG_ACCENT : PDA_CHAT_BG),
-                                  LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(g_ui.pick_btn[i], on ? LV_OPA_20 : LV_OPA_TRANSP,
-                                LV_PART_MAIN);
         if(g_ui.pick_lbl[i]) {
             lv_obj_set_style_text_color(g_ui.pick_lbl[i],
-                                        lv_color_hex(on ? col : PDA_MSG_SYS),
+                                        lv_color_hex(on ? PDA_SUB_TEXT_ON : PDA_TAB_TEXT),
                                         LV_PART_MAIN);
         }
+        if(g_ui.pick_disc[i]) draw_pick_disc(g_ui.pick_disc[i], g_ui.pick_buf[i], on);
     }
 }
 
@@ -413,56 +437,68 @@ static void on_pick_click(lv_event_t * e)
     }
 }
 
-/* the row under the strip: one button per carrier */
-static void build_pick(lv_obj_t * root, lv_group_t * group)
+/* the buttons in the strip: one per carrier, in the space between the
+   status and the badges */
+static void build_pick(lv_obj_t * strip, lv_group_t * group)
 {
-    lv_obj_t * pick = lv_obj_create(root);
-    lv_obj_set_pos(pick, 0, PICK_Y);
-    lv_obj_set_size(pick, LIST_W, PICK_H);
-    lv_obj_set_style_bg_opa(pick, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(pick, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(pick, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(pick, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_column(pick, 0, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(pick, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_scroll_dir(pick, LV_DIR_NONE);
-    lv_obj_set_scrollable(pick, false);
+    int n = chat_transport_count();
+    if(n <= 0) return;
 
-    lv_obj_t * lbl = lv_label_create(pick);
+    lv_obj_t * lbl = lv_label_create(strip);
     lv_label_set_text(lbl, "SEND ON");
-    lv_obj_set_pos(lbl, 24, 4);
     lv_obj_set_style_text_font(lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
     lv_obj_set_style_pad_all(lbl, 0, LV_PART_MAIN);
+    lv_obj_set_pos(lbl, 0, 0);       /* the place is set below */
 
-    int n = chat_transport_count();
+    int x = PICK_RIGHT - n * PICK_W - (n - 1) * PICK_GAP;
     for(int i = 0; i < n && i < CHAT_TRANSPORT_MAX; i++) {
         const chat_transport_t * tr = chat_transport_get(i);
         if(!tr) continue;
 
-        lv_obj_t * b = lv_button_create(pick);
-        lv_obj_set_pos(b, PICK_X + i * (PICK_W + PICK_GAP), 1);
-        lv_obj_set_size(b, PICK_W, 15);
-        lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+        lv_obj_t * b = lv_button_create(strip);
+        lv_obj_set_pos(b, x + i * (PICK_W + PICK_GAP), 4);
+        lv_obj_set_size(b, PICK_W, PICK_H);
+        lv_obj_set_style_bg_color(b, lv_color_hex(PDA_SUB_FILL), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
-        lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+        lv_obj_set_style_border_color(b, lv_color_hex(PDA_SUB_EDGE), LV_PART_MAIN);
         lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
         lv_no_transition(b);
 
+        /* the little disc, like the markers of the map's layer strip */
+        lv_obj_t * d = lv_canvas_create(b);
+        lv_canvas_set_buffer(d, g_ui.pick_buf[i], DISC_N, DISC_N,
+                              LV_COLOR_FORMAT_ARGB8888);
+        lv_obj_set_pos(d, 3, 3);
+        lv_obj_set_size(d, DISC_N, DISC_N);
+        lv_obj_set_style_border_width(d, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(d, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(d, 0, LV_PART_MAIN);
+        lv_obj_set_clickable(d, false);
+
         lv_obj_t * l = lv_label_create(b);
         lv_label_set_text(l, tr->tag);
+        lv_obj_set_pos(l, 14, 4);
+        lv_obj_set_width(l, PICK_W - 16);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
-        lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
         lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
-        lv_obj_center(l);
 
         lv_obj_add_event_cb(b, on_pick_click, LV_EVENT_CLICKED, (void *)(lv_intptr_t)i);
         g_ui.pick_btn[i] = b;
         g_ui.pick_lbl[i] = l;
+        g_ui.pick_disc[i] = d;
         if(group) lv_group_add_obj(group, b);
     }
+
+    /* the "SEND ON" label sits to the left of the buttons */
+    lv_point_t sz;
+    lv_text_get_size(&sz, "SEND ON", &pda_font_mono_10, 0, 0, LV_COORD_MAX,
+                     LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(lbl, x - sz.x - 8, 8);
     restyle_pick();
 }
 
@@ -518,7 +554,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     g_ui.status_lbl = lv_label_create(strip);
     lv_label_set_text(g_ui.status_lbl, "");
     lv_obj_set_pos(g_ui.status_lbl, 92, 7);
-    lv_obj_set_width(g_ui.status_lbl, 460);
+    lv_obj_set_width(g_ui.status_lbl, 300);
     lv_label_set_long_mode(g_ui.status_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(g_ui.status_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(g_ui.status_lbl, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
@@ -540,11 +576,12 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
         g_ui.badge[i] = b;
     }
 
+    /* the buttons that say which carriers a message goes out on - they sit
+       in the space between the status and the badges */
+    build_pick(strip, group);
+
     /* the rule under the strip */
     grit_rule(root, 6, STRIP_H + 2, 788, false, PDA_RULE);
-
-    /* --- the row that says which carriers a message goes out on --- */
-    build_pick(root, group);
 
     /* --- the frame: the log and the compose row live in it --- */
     lv_obj_t * frame = grit_frame(root, FRAME_X, FRAME_Y, FRAME_W, FRAME_H, PDA_FRAME);

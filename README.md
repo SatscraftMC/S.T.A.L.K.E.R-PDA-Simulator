@@ -54,10 +54,11 @@ on a desktop environment.
   every medium that is up - the local mesh, the FIPS mesh and the internet -
   and everything that comes in shows up in the same log, tagged with the
   carrier it arrived on.
-- **The carrier picker**: the row under the strip in the Messages tab has one
-  button per carrier. Click one and the message stops going out on it - one
-  carrier, two or all three. A carrier that is off still *receives*; it just
-  does not send. The choice is remembered.
+- **The carrier picker**: the strip of the Messages tab has one button per
+  carrier, in the space between the status and the carrier badges. Click one
+  and the message stops going out on it - one carrier, two or all three. A
+  carrier that is off still *receives*; it just does not send. The choice is
+  remembered.
 - **The newest message is at the top** of the log, like a chat that follows
   the conversation down. The log scrolls back for the older lines.
 - **A map of the mesh** on *Other -> Connections -> Bitchat*: this device in
@@ -96,12 +97,12 @@ on a desktop environment.
 
 ![the messages tab](docs/screenshots/messages.png)
 
-The row under the strip says **SEND ON** and has one button per carrier:
-click a button and the messages stop going out on that carrier - the mesh
-only, the mesh and the internet, all three, whatever you like. The text of
-the button is in the colour of the carrier's state (green up, grey looking,
-red down) and the box is lit when the carrier is used. The choice is
-remembered in the settings file (`send_bit`, `send_fips`, `send_net`).
+The row in the strip says **SEND ON** and has one button per carrier: click
+a button and the messages stop going out on that carrier - the mesh only, the
+mesh and the internet, all three, whatever you like. The buttons look like
+the layer strip of the map: a small disc that says whether the carrier is
+used, and the tag of the carrier next to it. The choice is remembered in the
+settings file (`send_bit`, `send_fips`, `send_net`).
 
 The log has the **newest message at the top**; the older ones are below it
 and the log scrolls back for them.
