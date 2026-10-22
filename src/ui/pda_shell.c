@@ -2,6 +2,7 @@
 #include "ui/palette.h"
 #include "ui/chat_ui.h"
 #include "ui/other_ui.h"
+#include "ui/radio_ui.h"
 #include "ui/prefs.h"
 #include "ui/i18n.h"
 #include "ui/format.h"
@@ -2023,6 +2024,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
 
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
+        else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, group); /* Radio */
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, group);
         else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
     }
@@ -2063,12 +2065,14 @@ void pda_shell_retheme(void)
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(!sh->panels[i]) continue;
         if(i == 0) chat_ui_destroy();
+        if(i == 2) radio_ui_destroy();
         if(i == TAB_COUNT - 2) other_ui_destroy();
         lv_obj_delete(sh->panels[i]);
         sh->panels[i] = NULL;
     }
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, sh->group);
+        else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, sh->group);
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, sh->group);
         else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
     }
