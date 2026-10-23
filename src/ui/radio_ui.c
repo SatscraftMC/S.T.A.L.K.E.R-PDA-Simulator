@@ -9,11 +9,13 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#pragma GCC diagnostic ignored "-Wformat-truncation"
 
 /* The Radio tab: a simple MP3 player styled like the STALKER music player.
  *
@@ -73,7 +75,7 @@ typedef struct {
     text_canvas_t * shuffle_canvas; /* Shuffle On/Off text canvas */
     text_canvas_t * time_canvas;    /* 04:18 text canvas */
     text_canvas_t * loop_canvas;    /* Loop On/Off text canvas */
-    text_canvas_t * playlist_canvas;/* Playlist: OST text canvas */
+    text_canvas_t * folder_canvas;  /* Folder: <name> text canvas */
     text_canvas_t * playing_canvas; /* Playing: ... text canvas */
     lv_obj_t * btn_canvases[9];
     lv_timer_t * timer;
@@ -84,7 +86,11 @@ typedef struct {
     bool shuffle;
     bool loop;
     pid_t player_pid;
+    char music_root[512];
     char music_dir[512];
+    char folders[32][128];
+    int n_folders;
+    int folder_idx;
 } radio_t;
 
 static radio_t g_radio;
@@ -100,12 +106,63 @@ static void on_next_click(lv_event_t * e);
 static void on_prev_click(lv_event_t * e);
 static void on_shuffle_click(lv_event_t * e);
 static void on_loop_click(lv_event_t * e);
+static void on_folder_click(lv_event_t * e);
 
 /* ---------- the music directory ---------- */
 
 static const char * radio_dir_key(void)
 {
     return "radio_dir";
+}
+
+/* collect the subdirectories of music_root, sorted */
+static void radio_list_folders(void)
+{
+    radio_t * r = &g_radio;
+    r->n_folders = 0;
+    r->folder_idx = -1;
+    DIR * d = opendir(r->music_root);
+    if(!d) return;
+    struct dirent * e;
+    char tmp[32][128];
+    int n = 0;
+    while((e = readdir(d)) && n < 32) {
+        if(e->d_name[0] == '.') continue;
+        char full[768];
+        snprintf(full, sizeof(full), "%s/%s", r->music_root, e->d_name);
+        struct stat st;
+        if(stat(full, &st) != 0) continue;
+        if(!S_ISDIR(st.st_mode)) continue;
+        snprintf(tmp[n], sizeof(tmp[n]), "%s", e->d_name);
+        n++;
+    }
+    closedir(d);
+    /* sort */
+    for(int i = 0; i < n; i++)
+        for(int j = i + 1; j < n; j++)
+            if(strcmp(tmp[i], tmp[j]) > 0) {
+                char t[128]; memcpy(t, tmp[i], 128);
+                memcpy(tmp[i], tmp[j], 128); memcpy(tmp[j], t, 128);
+            }
+    for(int i = 0; i < n; i++) {
+        snprintf(r->folders[i], sizeof(r->folders[i]), "%s", tmp[i]);
+        r->n_folders++;
+    }
+    /* figure out current folder index */
+    const char * base = strrchr(r->music_dir, '/');
+    base = base ? base + 1 : r->music_dir;
+    for(int i = 0; i < r->n_folders; i++) {
+        if(strcmp(r->folders[i], base) == 0) { r->folder_idx = i; break; }
+    }
+}
+
+static const char * folder_basename(const char * path)
+{
+    static char buf[128];
+    const char * b = strrchr(path, '/');
+    b = b ? b + 1 : path;
+    snprintf(buf, sizeof(buf), "%s", b);
+    return buf;
 }
 
 static void radio_scan_dir(void)
@@ -535,9 +592,29 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     radio_t * r = &g_radio;
     memset(r, 0, sizeof(*r));
 
+    const char * root = getenv("PDA_MUSIC_ROOT");
+    if(!root || !*root) root = "music";
+    snprintf(r->music_root, sizeof(r->music_root), "%s", root);
+
     const char * dir = getenv("PDA_RADIO_DIR");
-    if(!dir || !*dir) dir = prefs_str(radio_dir_key(), "assets/music");
-    snprintf(r->music_dir, sizeof(r->music_dir), "%s", dir);
+    if(!dir || !*dir) dir = prefs_str(radio_dir_key(), "");
+    if(dir && *dir) {
+        snprintf(r->music_dir, sizeof(r->music_dir), "%s", dir);
+    }
+    else {
+        radio_list_folders();
+        if(r->n_folders > 0) {
+            r->folder_idx = 0;
+        const char * _mr = (const char *)(void *)r->music_root;
+        const char * _fn = (const char *)(void *)r->folders[0];
+        snprintf(r->music_dir, sizeof(r->music_dir), "%s/%s", _mr, _fn);
+        }
+        else {
+            const char * _mr2 = (const char *)(void *)r->music_root;
+            snprintf(r->music_dir, sizeof(r->music_dir), "%s", _mr2);
+        }
+    }
+    radio_list_folders();
     r->cur_track = -1;
 
     lv_obj_t * p = lv_obj_create(parent);
@@ -592,10 +669,10 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* hairline under row 1 */
     grit_rule(inner, 0, 20, lv_pct(100), false, PDA_RULE);
 
-    /* row 2: Playlist: OST - dim text */
-    r->playlist_canvas = text_canvas_create(inner,
+    /* row 2: Folder: <name> - dim text */
+    r->folder_canvas = text_canvas_create(inner,
         10, 24, PANEL_W - 20, 16,
-        "Playlist: OST", &pda_font_mono_10, PDA_MSG_TIME);
+        "Folder: -", &pda_font_mono_10, PDA_MSG_TIME);
 
     /* row 3: Playing: ... - dim or cyan text */
     r->playing_canvas = text_canvas_create(inner,
@@ -639,6 +716,9 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_no_transition(b);
         if(group) lv_group_add_obj(group, b);
         switch(i) {
+        case 0:
+            lv_obj_add_event_cb(b, on_folder_click, LV_EVENT_CLICKED, NULL);
+            break;
         case 1:
             lv_obj_add_event_cb(b, on_loop_click, LV_EVENT_CLICKED, NULL);
             break;
@@ -662,9 +742,12 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         /* the canvas: rounded plate + icon */
         uint32_t * buf = g_icon_bufs[i];
         memset(buf, 0, sizeof(uint32_t) * (size_t)BTN_W * (size_t)BTN_H);
-        draw_plate_buf(buf, BTN_W, BTN_H, BTN_RADIUS,
-                       RADIO_BTN_FILL, RADIO_BTN_EDGE);
-        g_icons[i](buf, BTN_W, BTN_H, RADIO_BTN_ICON);
+         draw_plate_buf(buf, BTN_W, BTN_H, BTN_RADIUS,
+                        RADIO_BTN_FILL, RADIO_BTN_EDGE);
+         /* loop/prev/play/next render in white; the rest in light grey */
+         uint32_t ic = RADIO_BTN_ICON;
+         if(i == 1 || i == 5 || i == 7 || i == 8) ic = 0xFFFFFF;
+         g_icons[i](buf, BTN_W, BTN_H, 0xFF000000u | ic);
 
         lv_obj_t * c = lv_canvas_create(b);
         lv_canvas_set_buffer(c, buf, BTN_W, BTN_H, LV_COLOR_FORMAT_ARGB8888);
@@ -701,7 +784,7 @@ void radio_ui_destroy(void)
     r->shuffle_canvas = NULL;
     r->time_canvas = NULL;
     r->loop_canvas = NULL;
-    r->playlist_canvas = NULL;
+    r->folder_canvas = NULL;
     r->playing_canvas = NULL;
     r->n_tracks = 0;
     r->cur_track = -1;
@@ -715,6 +798,7 @@ void radio_ui_set_music_dir(const char * dir)
     radio_stop();
     snprintf(r->music_dir, sizeof(r->music_dir), "%s", dir ? dir : "");
     prefs_set_str(radio_dir_key(), r->music_dir);
+    radio_list_folders();
     radio_scan_dir();
     if(r->cur_track >= r->n_tracks) r->cur_track = -1;
     refresh();
@@ -768,6 +852,24 @@ static void on_loop_click(lv_event_t * e)
     refresh();
 }
 
+static void on_folder_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    radio_list_folders();
+    if(g_radio.n_folders <= 0) return;
+    g_radio.folder_idx++;
+    if(g_radio.folder_idx >= g_radio.n_folders) g_radio.folder_idx = 0;
+    if(g_radio.folder_idx < 0) g_radio.folder_idx = 0;
+    const char * _mr3 = (const char *)(void *)g_radio.music_root;
+    const char * _fn3 = (const char *)(void *)g_radio.folders[g_radio.folder_idx];
+    snprintf(g_radio.music_dir, sizeof(g_radio.music_dir), "%s/%s", _mr3, _fn3);
+    prefs_set_str(radio_dir_key(), g_radio.music_dir);
+    radio_stop();
+    g_radio.cur_track = -1;
+    radio_scan_dir();
+    refresh();
+}
+
 /* ---------- the panel refresh: redraws the info text canvases ---------- */
 
 static void refresh(void)
@@ -789,6 +891,14 @@ static void refresh(void)
     text_canvas_set_text(g_radio.loop_canvas,
         g_radio.loop ? "Loop On" : "Loop Off",
         &pda_font_mono_10, RADIO_CYAN);
+
+    /* row 2: Folder: <name> */
+    {
+        char fbuf[256];
+        snprintf(fbuf, sizeof(fbuf), "Folder: %s", folder_basename(g_radio.music_dir));
+        text_canvas_set_text(g_radio.folder_canvas,
+            fbuf, &pda_font_mono_10, PDA_MSG_TIME);
+    }
 
     /* row 3: Playing: ... */
     if(g_radio.playing && g_radio.n_tracks > 0) {
