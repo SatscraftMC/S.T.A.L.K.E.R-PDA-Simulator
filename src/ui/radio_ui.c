@@ -86,10 +86,13 @@ typedef struct {
     int n_tracks;
     int cur_track;
     bool playing;
+    bool paused;
     bool shuffle;
     bool loop;
     struct timespec play_start;
     bool has_play_start;
+    struct timespec pause_start;
+    long paused_offset;
     pid_t player_pid;
     char music_root[512];
     char music_dir[512];
@@ -107,6 +110,7 @@ static void refresh(void);
 static const char * track_short_name(const char * name);
 static void on_play_click(lv_event_t * e);
 static void on_stop_click(lv_event_t * e);
+static void on_pause_click(lv_event_t * e);
 static void on_next_click(lv_event_t * e);
 static void on_prev_click(lv_event_t * e);
 static void on_shuffle_click(lv_event_t * e);
@@ -242,7 +246,9 @@ static void radio_stop(void)
         g_radio.player_pid = -1;
     }
     g_radio.playing = false;
+    g_radio.paused = false;
     g_radio.has_play_start = false;
+    g_radio.paused_offset = 0;
 }
 
 static void radio_play_idx(int idx)
@@ -268,9 +274,11 @@ static void radio_play_idx(int idx)
     }
     g_radio.player_pid = pid;
     g_radio.playing = true;
+    g_radio.paused = false;
     g_radio.cur_track = idx;
     clock_gettime(CLOCK_MONOTONIC, &g_radio.play_start);
     g_radio.has_play_start = true;
+    g_radio.paused_offset = 0;
 }
 
 static void radio_next(void)
@@ -613,6 +621,14 @@ static void draw_stop_icon(uint32_t * buf, int w, int h, uint32_t color)
     fill_rect_buf(buf, w, h, cx - 5, cy - 5, cx + 5, cy + 5, color);
 }
 
+/* pause: two vertical bars */
+static void draw_pause_icon(uint32_t * buf, int w, int h, uint32_t color)
+{
+    int cx = w / 2, cy = h / 2;
+    fill_rect_buf(buf, w, h, cx - 7, cy - 7, cx - 3, cy + 7, color);
+    fill_rect_buf(buf, w, h, cx + 3, cy - 7, cx + 7, cy + 7, color);
+}
+
 /* play: filled triangle pointing right */
 static void draw_play_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
@@ -762,13 +778,13 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollable(inner, false);
     lv_obj_set_clickable(inner, false);
 
-    /* title strip above the panel - styled like the Other tab strip title */
-    grit_square(p, PANEL_X + 10, PANEL_Y - 20, 8, PDA_MSG_ACCENT);
-    grit_square(p, PANEL_X + PANEL_W - 18, PANEL_Y - 20, 8, PDA_MSG_ACCENT);
+    /* title strip at the top of the tab - styled like the Other tab */
+    grit_square(p, 22, 9, 8, PDA_MSG_ACCENT);
+    grit_square(p, 770, 9, 8, PDA_MSG_ACCENT);
     r->title_canvas = text_canvas_create(p,
-        PANEL_X + PANEL_W / 2 - 60, PANEL_Y - 24, 120, 20,
+        800 / 2 - 60, 4, 120, 20,
         "Music Player", &pda_font_mono_10, PDA_MSG_TEXT);
-    grit_rule(p, PANEL_X, PANEL_Y - 2, PANEL_W, false, PDA_RULE);
+    grit_rule(p, 6, 26, 788, false, PDA_RULE);
 
     /* row 1: Shuffle Off  04:18  Loop Off - cyan text */
     r->shuffle_canvas = text_canvas_create(inner,
@@ -788,6 +804,9 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     r->folder_canvas = text_canvas_create(inner,
         10, 24, PANEL_W - 20, 16,
         "Folder: -", &pda_font_mono_10, PDA_MSG_TIME);
+
+    /* hairline between folder and playing */
+    grit_rule(inner, 0, 38, lv_pct(100), false, PDA_RULE);
 
     /* row 3: Playing: ... - dim or cyan text */
     r->playing_canvas = text_canvas_create(inner,
@@ -810,7 +829,7 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         draw_vol_down_icon,
         draw_vol_up_icon,
         draw_prev_icon,
-        draw_stop_icon,
+        draw_pause_icon,
         draw_play_icon,
         draw_next_icon,
     };
@@ -844,7 +863,7 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
             lv_obj_add_event_cb(b, on_prev_click, LV_EVENT_CLICKED, NULL);
             break;
         case 6:
-            lv_obj_add_event_cb(b, on_stop_click, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_event_cb(b, on_pause_click, LV_EVENT_CLICKED, NULL);
             break;
         case 7:
             lv_obj_add_event_cb(b, on_play_click, LV_EVENT_CLICKED, NULL);
@@ -873,6 +892,7 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     }
 
     /* music manager: scrollable list of tracks in the selected folder */
+    grit_rule(p, 100, 200, 600, false, PDA_RULE);
     r->track_list = lv_obj_create(p);
     lv_obj_set_pos(r->track_list, 100, 204);
     lv_obj_set_size(r->track_list, 600, 260);
@@ -938,19 +958,30 @@ static void on_play_click(lv_event_t * e)
 {
     LV_UNUSED(e);
     if(g_radio.n_tracks <= 0) return;
-    if(g_radio.playing) {
-        radio_stop();
+    if(g_radio.paused) {
+        if(g_radio.player_pid > 0) kill(g_radio.player_pid, SIGCONT);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long dur = (long)(now.tv_sec - g_radio.pause_start.tv_sec);
+        if(dur < 0) dur = 0;
+        g_radio.paused_offset += dur;
+        g_radio.paused = false;
+        refresh();
+        return;
     }
-    else {
+    if(!g_radio.playing) {
         radio_play_idx(g_radio.cur_track >= 0 ? g_radio.cur_track : 0);
     }
     refresh();
 }
 
-static void on_stop_click(lv_event_t * e)
+static void on_pause_click(lv_event_t * e)
 {
     LV_UNUSED(e);
-    radio_stop();
+    if(!g_radio.playing || g_radio.paused) return;
+    if(g_radio.player_pid > 0) kill(g_radio.player_pid, SIGSTOP);
+    g_radio.paused = true;
+    clock_gettime(CLOCK_MONOTONIC, &g_radio.pause_start);
     refresh();
 }
 
@@ -1015,9 +1046,10 @@ static void refresh(void)
     char tbuf[16];
     int elapsed = 0;
     if(g_radio.playing && g_radio.has_play_start) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        elapsed = (int)(now.tv_sec - g_radio.play_start.tv_sec);
+        struct timespec ref;
+        if(g_radio.paused) ref = g_radio.pause_start;
+        else clock_gettime(CLOCK_MONOTONIC, &ref);
+        elapsed = (int)(ref.tv_sec - g_radio.play_start.tv_sec) - (int)g_radio.paused_offset;
         if(elapsed < 0) elapsed = 0;
     }
     snprintf(tbuf, sizeof(tbuf), "%02d:%02d",
