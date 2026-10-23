@@ -51,7 +51,6 @@
 #define BTN_RADIUS   7
 
 /* the cyan used for the active text, like Image 1 */
-#define RADIO_CYAN   0x00B0D8
 
 /* the button row, like Image 1: dark rounded plates with light grey icons */
 #define RADIO_BTN_FILL  0x262628
@@ -713,13 +712,13 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* row 1: Shuffle Off  04:18  Loop Off - cyan text */
     r->shuffle_canvas = text_canvas_create(inner,
         10, 0, 130, 16,
-        "Shuffle Off", &pda_font_mono_10, RADIO_CYAN);
+        "Shuffle Off", &pda_font_mono_10, PDA_MSG_ACCENT);
     r->time_canvas = text_canvas_create(inner,
         PANEL_W / 2 - 40, 0, 80, 16,
-        "00:00", &pda_font_mono_10, RADIO_CYAN);
+        "00:00", &pda_font_mono_10, PDA_MSG_ACCENT);
     r->loop_canvas = text_canvas_create(inner,
         PANEL_W - 130, 0, 130, 16,
-        "Loop Off", &pda_font_mono_10, RADIO_CYAN);
+        "Loop Off", &pda_font_mono_10, PDA_MSG_ACCENT);
 
     /* hairline under row 1 */
     grit_rule(inner, 0, 20, lv_pct(100), false, PDA_RULE);
@@ -950,18 +949,18 @@ static void refresh(void)
     /* row 1: Shuffle Off  04:18  Loop Off */
     text_canvas_set_text(g_radio.shuffle_canvas,
         g_radio.shuffle ? "Shuffle On" : "Shuffle Off",
-        &pda_font_mono_10, RADIO_CYAN);
+        &pda_font_mono_10, PDA_MSG_ACCENT);
 
     char tbuf[16];
     snprintf(tbuf, sizeof(tbuf), "%02d:%02d",
              g_radio.playing ? (g_radio.cur_track / 60) : 0,
              g_radio.playing ? (g_radio.cur_track % 60) : 0);
     text_canvas_set_text(g_radio.time_canvas,
-        tbuf, &pda_font_mono_10, RADIO_CYAN);
+        tbuf, &pda_font_mono_10, PDA_MSG_ACCENT);
 
     text_canvas_set_text(g_radio.loop_canvas,
         g_radio.loop ? "Loop On" : "Loop Off",
-        &pda_font_mono_10, RADIO_CYAN);
+        &pda_font_mono_10, PDA_MSG_ACCENT);
 
     /* row 2: Folder: <name> */
     {
@@ -977,7 +976,7 @@ static void refresh(void)
         snprintf(pl, sizeof(pl), "Playing: %s",
                  track_short_name(g_radio.tracks[g_radio.cur_track].name));
         text_canvas_set_text(g_radio.playing_canvas,
-            pl, &pda_font_mono_10, RADIO_CYAN);
+            pl, &pda_font_mono_10, PDA_MSG_ACCENT);
     }
     else {
         text_canvas_set_text(g_radio.playing_canvas,
