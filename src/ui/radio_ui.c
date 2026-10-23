@@ -744,10 +744,8 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         memset(buf, 0, sizeof(uint32_t) * (size_t)BTN_W * (size_t)BTN_H);
          draw_plate_buf(buf, BTN_W, BTN_H, BTN_RADIUS,
                         RADIO_BTN_FILL, RADIO_BTN_EDGE);
-         /* loop/prev/play/next render in white; the rest in light grey */
-         uint32_t ic = RADIO_BTN_ICON;
-         if(i == 1 || i == 5 || i == 7 || i == 8) ic = 0xFFFFFF;
-         g_icons[i](buf, BTN_W, BTN_H, 0xFF000000u | ic);
+         /* all icons light grey; alpha forced (the ARGB gotcha) */
+         g_icons[i](buf, BTN_W, BTN_H, 0xFF000000u | RADIO_BTN_ICON);
 
         lv_obj_t * c = lv_canvas_create(b);
         lv_canvas_set_buffer(c, buf, BTN_W, BTN_H, LV_COLOR_FORMAT_ARGB8888);
