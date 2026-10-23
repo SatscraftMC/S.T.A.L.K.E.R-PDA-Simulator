@@ -76,6 +76,7 @@ typedef struct {
     text_canvas_t * time_canvas;    /* 04:18 text canvas */
     text_canvas_t * loop_canvas;    /* Loop On/Off text canvas */
     text_canvas_t * folder_canvas;  /* Folder: <name> text canvas */
+    lv_obj_t * track_list;         /* scrollable list of tracks */
     text_canvas_t * playing_canvas; /* Playing: ... text canvas */
     lv_obj_t * btn_canvases[9];
     lv_timer_t * timer;
@@ -107,6 +108,8 @@ static void on_prev_click(lv_event_t * e);
 static void on_shuffle_click(lv_event_t * e);
 static void on_loop_click(lv_event_t * e);
 static void on_folder_click(lv_event_t * e);
+static void on_track_click(lv_event_t * e);
+static void radio_build_track_list(void);
 
 /* ---------- the music directory ---------- */
 
@@ -204,13 +207,20 @@ static void radio_play_idx(int idx)
     if(idx < 0 || idx >= g_radio.n_tracks) return;
     radio_stop();
 
-    char uri[1024];
-    snprintf(uri, sizeof(uri), "file://%s", g_radio.tracks[idx].path);
+    char abspath[4096];
+    if(!realpath(g_radio.tracks[idx].path, abspath))
+        snprintf(abspath, sizeof(abspath), "%s", g_radio.tracks[idx].path);
+
+    char uri[4112];
+    snprintf(uri, sizeof(uri), "file://%s", abspath);
+
+    char uriprop[4120];
+    snprintf(uriprop, sizeof(uriprop), "uri=%s", uri);
 
     pid_t pid = fork();
     if(pid == 0) {
         execlp("gst-launch-1.0", "gst-launch-1.0", "-q",
-               "playbin", "uri", uri, NULL);
+               "playbin", uriprop, NULL);
         _exit(127);
     }
     g_radio.player_pid = pid;
@@ -585,6 +595,51 @@ static void draw_next_icon(uint32_t * buf, int w, int h, uint32_t color)
 
 typedef void (*icon_fn)(uint32_t *, int, int, uint32_t);
 
+
+/* ---------- track list (music manager) ---------- */
+
+static void on_track_click(lv_event_t * e)
+{
+    int idx = (int)(size_t)lv_event_get_user_data(e);
+    if(idx < 0 || idx >= g_radio.n_tracks) return;
+    radio_play_idx(idx);
+    refresh();
+}
+
+static void radio_build_track_list(void)
+{
+    radio_t * r = &g_radio;
+    if(!r->track_list) return;
+    lv_obj_clean(r->track_list);
+
+    if(r->n_tracks <= 0) {
+        lv_obj_t * lbl = lv_label_create(r->track_list);
+        lv_label_set_text(lbl, "No tracks in this folder");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
+        lv_obj_set_style_text_font(lbl, &pda_font_mono_10, LV_PART_MAIN);
+        return;
+    }
+
+    for(int i = 0; i < r->n_tracks; i++) {
+        lv_obj_t * b = lv_button_create(r->track_list);
+        lv_obj_set_width(b, lv_pct(100));
+        lv_obj_set_height(b, 26);
+        lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(b, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(b, 3, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(b, 4, LV_PART_MAIN);
+        lv_obj_add_event_cb(b, on_track_click, LV_EVENT_CLICKED,
+                            (void *)(size_t)i);
+
+        lv_obj_t * lbl = lv_label_create(b);
+        lv_label_set_text(lbl, track_short_name(r->tracks[i].name));
+        lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+        lv_obj_set_style_text_font(lbl, &pda_font_mono_10, LV_PART_MAIN);
+        lv_obj_set_width(lbl, lv_pct(100));
+    }
+}
+
 /* ---------- panel builder ---------- */
 
 lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
@@ -757,8 +812,24 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_set_clickable(c, false);
     }
 
+    /* music manager: scrollable list of tracks in the selected folder */
+    r->track_list = lv_obj_create(p);
+    lv_obj_set_pos(r->track_list, 100, 204);
+    lv_obj_set_size(r->track_list, 600, 260);
+    lv_obj_set_style_bg_color(r->track_list, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(r->track_list, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(r->track_list, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_border_width(r->track_list, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(r->track_list, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(r->track_list, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(r->track_list, 2, LV_PART_MAIN);
+    lv_obj_set_flex_flow(r->track_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(r->track_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scrollable(r->track_list, true);
+
     /* scan the directory */
     radio_scan_dir();
+    radio_build_track_list();
 
     /* the tick notices when a track finishes */
     r->timer = lv_timer_create(radio_tick, 200, NULL);
@@ -783,6 +854,7 @@ void radio_ui_destroy(void)
     r->time_canvas = NULL;
     r->loop_canvas = NULL;
     r->folder_canvas = NULL;
+    r->track_list = NULL;
     r->playing_canvas = NULL;
     r->n_tracks = 0;
     r->cur_track = -1;
@@ -865,6 +937,7 @@ static void on_folder_click(lv_event_t * e)
     radio_stop();
     g_radio.cur_track = -1;
     radio_scan_dir();
+    radio_build_track_list();
     refresh();
 }
 
