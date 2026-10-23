@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.3.8-alpha**
+**v0.3.9-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -42,10 +42,11 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **Wheel zooms to cursor** (world point under pointer stays fixed); +/- buttons zoom around view center
 - **Radio tab**: simple MP3 player styled like the STALKER music player -
   shuffle/loop toggles, track time, playlist and "Playing:" line in a central
-  panel, parallelogram control buttons below (menu, shuffle, loop, vol-, vol+,
-  prev, stop, play, next). Scans a directory for MP3 files and plays them via
-  `gst-launch-1.0`. The directory is configurable (`PDA_RADIO_DIR`, saved in
-  settings). Auto-advances to the next track when one finishes.
+  panel, rounded control plates below in three groups (playlist, repeat,
+  shuffle / vol-, vol+ / prev, stop, play, next) with grey canvas-drawn
+  icons, like the reference image. Scans a directory for MP3 files and plays
+  them via `gst-launch-1.0`. The directory is configurable (`PDA_RADIO_DIR`,
+  saved in settings). Auto-advances to the next track when one finishes.
 
 ## Carriers
 

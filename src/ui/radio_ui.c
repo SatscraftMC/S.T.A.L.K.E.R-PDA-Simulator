@@ -24,16 +24,17 @@
  *   |  Playlist: OST                                           ...|
  *   |  Playing: cheeki breeki but a bit classy                    |
  *   +-------------------------------------------------------------+
- *   | [≡] [↻] [↺]   [−] [+]   [◄◄] [■] [▶] [►►]                   |
+ *   | [≣] [⟳] [⤨]  [−] [+]  [◀|] [■] [▶] [|▶]                     |
  *   +-------------------------------------------------------------+
  *
  * Plays via gst-launch-1.0 (fork/exec + kill). Directory remembered in
  * prefs (radio_dir).
  *
  * The active elements (shuffle/loop/time/playing) are drawn in cyan, like
- * Image 1. The control buttons are outline-only parallelograms with
- * canvas-drawn icons, matching the STALKER guide look of the Other and
- * Messages tabs.
+ * Image 1. The control buttons are rounded dark plates (like the image:
+ * slightly lighter fill, a faint 1px edge, light grey icons) in three
+ * groups: playlist/repeat/shuffle, volume down/up, prev/stop/play/next.
+ * Every plate and icon is canvas-drawn pixel by pixel.
  */
 
 #define MAX_TRACKS   64
@@ -41,16 +42,21 @@
 #define PANEL_Y      50
 #define PANEL_W      400
 #define PANEL_H      100
-#define BTN_W        70
-#define BTN_H        28
-#define BTN_GAP      8
-#define GROUP_GAP    12
-#define BTN_SLANT    11
+#define BTN_W        58
+#define BTN_H        30
+#define BTN_GAP      5
+#define GROUP_GAP    27
+#define BTN_RADIUS   7
 
 /* the cyan used for the active text, like Image 1 */
 #define RADIO_CYAN   0x00B0D8
 
-/* one canvas buffer per button, holding the parallelogram outline + icon */
+/* the button row, like Image 1: dark rounded plates with light grey icons */
+#define RADIO_BTN_FILL  0x262628
+#define RADIO_BTN_EDGE  0x4A4A4C
+#define RADIO_BTN_ICON  0xADB0B5
+
+/* one canvas buffer per button, holding the plate + icon */
 static uint32_t g_icon_bufs[9][BTN_W * BTN_H];
 
 typedef struct {
@@ -92,6 +98,8 @@ static void on_play_click(lv_event_t * e);
 static void on_stop_click(lv_event_t * e);
 static void on_next_click(lv_event_t * e);
 static void on_prev_click(lv_event_t * e);
+static void on_shuffle_click(lv_event_t * e);
+static void on_loop_click(lv_event_t * e);
 
 /* ---------- the music directory ---------- */
 
@@ -293,24 +301,23 @@ static const char * track_short_name(const char * name)
     return buf;
 }
 
-/* ---------- parallelogram outline + icon drawing ---------- */
+/* ---------- rounded plate + icon drawing ---------- */
 
-/* draw a parallelogram outline into an ARGB8888 buffer, slanted like the
-   STALKER tab bar buttons. Color is 0xRRGGBB; alpha is set to 0xFF. */
-static void draw_parallelogram_buf(uint32_t * buf, int w, int h, int slant,
-                                   uint32_t color)
+/* draw a filled rounded plate with a 1px edge into an ARGB8888 buffer.
+   Colors are 0xRRGGBB; alpha is set to 0xFF (the ARGB gotcha). */
+static void draw_plate_buf(uint32_t * buf, int w, int h, int radius,
+                           uint32_t fill, uint32_t edge)
 {
-    color = 0xFF000000u | (color & 0xFFFFFFu);
     for(int y = 0; y < h; y++) {
-        int shift = slant * (h - 1 - y) / (h - 1);
-        int x1 = shift;
-        int x2 = w - 1 + shift;
-        if(y == 0 || y == h - 1) {
-            for(int x = x1; x <= x2; x++) buf[y * w + x] = color;
-        }
-        else {
-            buf[y * w + x1] = color;
-            buf[y * w + x2] = color;
+        for(int x = 0; x < w; x++) {
+            double px = x + 0.5, py = y + 0.5;
+            double qx = (px < radius) ? radius :
+                        (px > w - radius ? w - radius : px);
+            double qy = (py < radius) ? radius :
+                        (py > h - radius ? h - radius : py);
+            double d = sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
+            uint32_t c = (d > radius - 1.0) ? edge : fill;
+            buf[y * w + x] = 0xFF000000u | (c & 0xFFFFFFu);
         }
     }
 }
@@ -327,98 +334,163 @@ static void fill_rect_buf(uint32_t * buf, int w, int h, int x0, int y0,
     }
 }
 
-/* ---------- icon drawing ---------- */
-
-/* hamburger menu: three horizontal bars */
-static void draw_menu_icon(uint32_t * buf, int w, int h, uint32_t color)
+/* draw a line (Bresenham) into an ARGB8888 buffer */
+static void draw_line_buf(uint32_t * buf, int w, int h,
+                          int x0, int y0, int x1, int y1, uint32_t color)
 {
-    int cx = w / 2;
-    int bar_w = 14;
-    int bar_h = 2;
-    int gap = 4;
-    int y0 = h / 2 - bar_h * 3 - gap * 2;
-    for(int b = 0; b < 3; b++) {
-        fill_rect_buf(buf, w, h, cx - bar_w / 2, y0 + b * (bar_h + gap),
-                      cx + bar_w / 2, y0 + b * (bar_h + gap) + bar_h - 1, color);
+    color = 0xFF000000u | (color & 0xFFFFFFu);
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for(;;) {
+        if(x0 >= 0 && x0 < w && y0 >= 0 && y0 < h) buf[y0 * w + x0] = color;
+        if(x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if(e2 >= dy) { err += dy; x0 += sx; }
+        if(e2 <= dx) { err += dx; y0 += sy; }
     }
 }
 
-/* repeat: circular arrow going clockwise */
+/* fill a triangle into an ARGB8888 buffer (point-in-triangle test) */
+static void fill_triangle_buf(uint32_t * buf, int w, int h,
+                              double x0, double y0, double x1, double y1,
+                              double x2, double y2, uint32_t color)
+{
+    color = 0xFF000000u | (color & 0xFFFFFFu);
+    int xmn = (int)floorf((float)fmin(x0, fmin(x1, x2)));
+    int ymn = (int)floorf((float)fmin(y0, fmin(y1, y2)));
+    int xmx = (int)ceilf((float)fmax(x0, fmax(x1, x2)));
+    int ymx = (int)ceilf((float)fmax(y0, fmax(y1, y2)));
+    double area2 = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if(fabs(area2) < 1e-9) return;
+    for(int y = ymn; y <= ymx && y < h; y++) {
+        for(int x = xmn; x <= xmx && x < w; x++) {
+            if(x < 0 || y < 0) continue;
+            double px = x + 0.5, py = y + 0.5;
+            double s = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+            double t = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+            double u = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
+            if((s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0))
+                buf[y * w + x] = color;
+        }
+    }
+}
+
+/* a solid triangular arrowhead at (tx,ty), pointing along the unit
+   direction (dx,dy), with a small overshoot so it caps the stroke */
+static void draw_arrowhead_buf(uint32_t * buf, int w, int h,
+                               double tx, double ty, double dx, double dy,
+                               uint32_t color)
+{
+    double n = sqrt(dx * dx + dy * dy);
+    if(n < 1e-6) return;
+    dx /= n; dy /= n;
+    double px = -dy, py = dx;
+    double txp = tx + dx * 2, typ = ty + dy * 2;
+    double b1x = tx - dx * 5 + px * 3, b1y = ty - dy * 5 + py * 3;
+    double b2x = tx - dx * 5 - px * 3, b2y = ty - dy * 5 - py * 3;
+    fill_triangle_buf(buf, w, h, txp, typ, b1x, b1y, b2x, b2y, color);
+}
+
+/* ---------- icon drawing ---------- */
+
+/* playlist: four lines with a bullet beside each */
+static void draw_playlist_icon(uint32_t * buf, int w, int h, uint32_t color)
+{
+    int cx = w / 2, cy = h / 2;
+    for(int r = 0; r < 4; r++) {
+        int y = cy - 7 + r * 5;
+        fill_rect_buf(buf, w, h, cx - 10, y, cx - 9, y + 1, color);
+        fill_rect_buf(buf, w, h, cx - 6, y, cx + 9, y + 1, color);
+    }
+}
+
+/* repeat: a clockwise loop of two thick arcs with solid arrowheads
+   (top arc travels left->top->right, bottom arc right->bottom->left) */
 static void draw_repeat_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    int r = 7;
-    for(int a = 200; a <= 340; a++) {
+    int ex = 0, ey = 0;
+    for(int a = 195; a <= 335; a++) {
         double rad = a * M_PI / 180.0;
-        int x = cx + (int)(r * cos(rad) + 0.5);
-        int y = cy + (int)(r * sin(rad) + 0.5);
-        if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = color;
+        for(int k = 0; k < 2; k++) {
+            double rx = 9 - 1.5 * k, ry = 6.5 - 1.3 * k;
+            int x = cx + (int)(rx * cos(rad) + 0.5);
+            int y = cy + (int)(ry * sin(rad) + 0.5);
+            if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = color;
+        }
+        if(a == 335) { ex = cx + (int)(9 * cos(rad) + 0.5);
+                       ey = cy + (int)(6.5 * sin(rad) + 0.5); }
     }
-    int ax = cx + (int)(r * cos(340.0 * M_PI / 180.0) + 0.5);
-    int ay = cy + (int)(r * sin(340.0 * M_PI / 180.0) + 0.5);
-    fill_rect_buf(buf, w, h, ax - 1, ay - 1, ax + 1, ay + 1, color);
-    fill_rect_buf(buf, w, h, cx - 1, cy - r - 1, cx + 1, cy - r + 1, color);
+    double rad = 335.0 * M_PI / 180.0;
+    draw_arrowhead_buf(buf, w, h, ex, ey, -9 * sin(rad), 6.5 * cos(rad), color);
+
+    for(int a = 15; a <= 165; a++) {
+        double rad = a * M_PI / 180.0;
+        for(int k = 0; k < 2; k++) {
+            double rx = 9 - 1.5 * k, ry = 6.5 - 1.3 * k;
+            int x = cx + (int)(rx * cos(rad) + 0.5);
+            int y = cy + (int)(ry * sin(rad) + 0.5);
+            if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = color;
+        }
+        if(a == 165) { ex = cx + (int)(9 * cos(rad) + 0.5);
+                       ey = cy + (int)(6.5 * sin(rad) + 0.5); }
+    }
+    rad = 165.0 * M_PI / 180.0;
+    draw_arrowhead_buf(buf, w, h, ex, ey, -9 * sin(rad), 6.5 * cos(rad), color);
 }
 
-/* shuffle: two crossing arrows forming an X */
+/* shuffle: two thick crossing arrows with solid arrowheads on the right ends */
 static void draw_shuffle_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    int r = 8;
-    for(int d = -r; d <= r; d++) {
-        int x = cx + d, y = cy + d;
-        if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = color;
+    draw_line_buf(buf, w, h, cx - 10, cy + 6, cx + 7, cy - 7, color);
+    draw_line_buf(buf, w, h, cx - 10, cy + 7, cx + 7, cy - 6, color);
+    draw_line_buf(buf, w, h, cx - 10, cy - 6, cx + 7, cy + 7, color);
+    draw_line_buf(buf, w, h, cx - 10, cy - 7, cx + 7, cy + 6, color);
+    draw_arrowhead_buf(buf, w, h, cx + 7, cy - 7, 1.0, -1.0, color);
+    draw_arrowhead_buf(buf, w, h, cx + 7, cy + 7, 1.0, 1.0, color);
+}
+
+/* speaker body: solid box on the left, horn flaring to the right */
+static void draw_speaker_buf(uint32_t * buf, int w, int h,
+                             int cx, int cy, uint32_t color)
+{
+    fill_rect_buf(buf, w, h, cx - 7, cy - 3, cx - 5, cy + 3, color);
+    for(int x = cx - 4; x <= cx - 1; x++) {
+        int flare = (cx - 1) - x;
+        int top = cy - 3 - flare;
+        int bot = cy + 3 + flare;
+        fill_rect_buf(buf, w, h, x, top, x, bot, color);
     }
-    for(int d = -r; d <= r; d++) {
-        int x = cx + d, y = cy - d;
-        if(x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = color;
-    }
-    fill_rect_buf(buf, w, h, cx + r - 1, cy + r - 1, cx + r + 1, cy + r + 1, color);
-    fill_rect_buf(buf, w, h, cx - r - 1, cy - r - 1, cx - r + 1, cy - r + 1, color);
 }
 
 /* volume down: speaker with minus */
 static void draw_vol_down_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    fill_rect_buf(buf, w, h, cx - 5, cy - 5, cx - 1, cy + 5, color);
-    for(int y = cy - 4; y <= cy + 4; y++) {
-        int xw = 4 - abs(y - cy);
-        for(int x = cx; x <= cx + xw && x < w; x++) {
-            if(x >= 0 && y >= 0 && y < h) buf[y * w + x] = color;
-        }
-    }
-    fill_rect_buf(buf, w, h, cx + 2, cy - 1, cx + 6, cy + 1, color);
+    draw_speaker_buf(buf, w, h, cx, cy, color);
+    fill_rect_buf(buf, w, h, cx + 2, cy - 1, cx + 7, cy + 1, color);
 }
 
 /* volume up: speaker with plus */
 static void draw_vol_up_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    fill_rect_buf(buf, w, h, cx - 5, cy - 5, cx - 1, cy + 5, color);
-    for(int y = cy - 4; y <= cy + 4; y++) {
-        int xw = 4 - abs(y - cy);
-        for(int x = cx; x <= cx + xw && x < w; x++) {
-            if(x >= 0 && y >= 0 && y < h) buf[y * w + x] = color;
-        }
-    }
-    fill_rect_buf(buf, w, h, cx + 3, cy - 1, cx + 6, cy + 1, color);
-    fill_rect_buf(buf, w, h, cx + 4, cy - 2, cx + 5, cy + 2, color);
+    draw_speaker_buf(buf, w, h, cx, cy, color);
+    fill_rect_buf(buf, w, h, cx + 2, cy - 1, cx + 7, cy + 1, color);
+    fill_rect_buf(buf, w, h, cx + 4, cy - 3, cx + 5, cy + 3, color);
 }
 
-/* previous: double left triangle */
+/* previous: filled left triangle with a bar on its right */
 static void draw_prev_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    for(int g = 0; g < 2; g++) {
-        int ox = cx - 6 + g * 5;
-        for(int dy = -4; dy <= 4; dy++) {
-            int dx = 4 - abs(dy);
-            for(int x = ox - dx; x <= ox; x++) {
-                if(x >= 0 && x < w && cy + dy >= 0 && cy + dy < h)
-                    buf[(cy + dy) * w + x] = color;
-            }
-        }
+    fill_rect_buf(buf, w, h, cx + 4, cy - 7, cx + 5, cy + 7, color);
+    for(int dy = -6; dy <= 6; dy++) {
+        int x0 = cx - 9 + abs(dy) * 10 / 6;
+        for(int x = x0; x <= cx + 1; x++)
+            if(x >= 0 && x < w) buf[(cy + dy) * w + x] = color;
     }
 }
 
@@ -426,35 +498,31 @@ static void draw_prev_icon(uint32_t * buf, int w, int h, uint32_t color)
 static void draw_stop_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    fill_rect_buf(buf, w, h, cx - 4, cy - 4, cx + 4, cy + 4, color);
+    fill_rect_buf(buf, w, h, cx - 5, cy - 5, cx + 5, cy + 5, color);
 }
 
 /* play: filled triangle pointing right */
 static void draw_play_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    for(int dy = -5; dy <= 5; dy++) {
-        int dx = 5 - abs(dy);
-        for(int x = cx; x <= cx + dx && x < w; x++) {
+    for(int dy = -6; dy <= 6; dy++) {
+        int x1 = cx - 6 + (6 - abs(dy)) * 10 / 6;
+        for(int x = cx - 6; x <= x1 && x < w; x++)
             if(x >= 0 && cy + dy >= 0 && cy + dy < h)
                 buf[(cy + dy) * w + x] = color;
-        }
     }
 }
 
-/* next: double right triangle */
+/* next: filled right triangle with a bar on its left */
 static void draw_next_icon(uint32_t * buf, int w, int h, uint32_t color)
 {
     int cx = w / 2, cy = h / 2;
-    for(int g = 0; g < 2; g++) {
-        int ox = cx + 6 - g * 5;
-        for(int dy = -4; dy <= 4; dy++) {
-            int dx = 4 - abs(dy);
-            for(int x = ox; x <= ox + dx && x < w; x++) {
-                if(x >= 0 && cy + dy >= 0 && cy + dy < h)
-                    buf[(cy + dy) * w + x] = color;
-            }
-        }
+    fill_rect_buf(buf, w, h, cx - 5, cy - 7, cx - 4, cy + 7, color);
+    for(int dy = -6; dy <= 6; dy++) {
+        int x1 = cx + 9 - abs(dy) * 10 / 6;
+        for(int x = cx - 1; x <= x1 && x < w; x++)
+            if(x >= 0 && cy + dy >= 0 && cy + dy < h)
+                buf[(cy + dy) * w + x] = color;
     }
 }
 
@@ -537,14 +605,14 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* hairline at bottom of panel */
     grit_rule(inner, 0, PANEL_H - 4, lv_pct(100), false, PDA_RULE);
 
-    /* control row: outline-only parallelogram buttons with canvas-drawn icons */
+    /* control row: rounded dark plates with canvas-drawn icons, like Image 1 */
     int btn_y = PANEL_Y + PANEL_H + 16;
-    int total_w = 9 * BTN_W + 8 * BTN_GAP + 2 * GROUP_GAP;
+    int total_w = 9 * BTN_W + 6 * BTN_GAP + 2 * GROUP_GAP;
     int start_x = (800 - total_w) / 2;
 
-    /* buttons: menu, shuffle, loop, vol-, vol+, prev, stop, play, next */
+    /* buttons: playlist, repeat, shuffle, vol-, vol+, prev, stop, play, next */
     static const icon_fn g_icons[9] = {
-        draw_menu_icon,
+        draw_playlist_icon,
         draw_repeat_icon,
         draw_shuffle_icon,
         draw_vol_down_icon,
@@ -558,7 +626,7 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     for(int i = 0; i < 9; i++) {
         int x = start_x + i * BTN_W;
         for(int j = 0; j < i; j++)
-            x += (j == 2 || j == 5) ? GROUP_GAP : BTN_GAP;
+            x += (j == 2 || j == 4) ? GROUP_GAP : BTN_GAP;
 
         /* the button: transparent, clickable, no border */
         lv_obj_t * b = lv_button_create(p);
@@ -570,12 +638,33 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
         lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
         lv_no_transition(b);
         if(group) lv_group_add_obj(group, b);
+        switch(i) {
+        case 1:
+            lv_obj_add_event_cb(b, on_loop_click, LV_EVENT_CLICKED, NULL);
+            break;
+        case 2:
+            lv_obj_add_event_cb(b, on_shuffle_click, LV_EVENT_CLICKED, NULL);
+            break;
+        case 5:
+            lv_obj_add_event_cb(b, on_prev_click, LV_EVENT_CLICKED, NULL);
+            break;
+        case 6:
+            lv_obj_add_event_cb(b, on_stop_click, LV_EVENT_CLICKED, NULL);
+            break;
+        case 7:
+            lv_obj_add_event_cb(b, on_play_click, LV_EVENT_CLICKED, NULL);
+            break;
+        case 8:
+            lv_obj_add_event_cb(b, on_next_click, LV_EVENT_CLICKED, NULL);
+            break;
+        }
 
-        /* the canvas: parallelogram outline + icon */
+        /* the canvas: rounded plate + icon */
         uint32_t * buf = g_icon_bufs[i];
         memset(buf, 0, sizeof(uint32_t) * (size_t)BTN_W * (size_t)BTN_H);
-        draw_parallelogram_buf(buf, BTN_W, BTN_H, BTN_SLANT, PDA_TAB_STROKE);
-        g_icons[i](buf, BTN_W, BTN_H, PDA_TAB_TEXT);
+        draw_plate_buf(buf, BTN_W, BTN_H, BTN_RADIUS,
+                       RADIO_BTN_FILL, RADIO_BTN_EDGE);
+        g_icons[i](buf, BTN_W, BTN_H, RADIO_BTN_ICON);
 
         lv_obj_t * c = lv_canvas_create(b);
         lv_canvas_set_buffer(c, buf, BTN_W, BTN_H, LV_COLOR_FORMAT_ARGB8888);
@@ -662,6 +751,20 @@ static void on_prev_click(lv_event_t * e)
 {
     LV_UNUSED(e);
     radio_prev();
+    refresh();
+}
+
+static void on_shuffle_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    g_radio.shuffle = !g_radio.shuffle;
+    refresh();
+}
+
+static void on_loop_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    g_radio.loop = !g_radio.loop;
     refresh();
 }
 
