@@ -18,6 +18,11 @@
 
 #define LV_USE_SDL 1
 #define LV_SDL_BUF_COUNT 2
+/* LVGL's SDL driver exits with exit(0) when the last window is closed -
+   from inside lv_timer_handler, so the app's own shutdown (killing the
+   music player child) would never run. Let LVGL only deinit instead and
+   let main() decide. */
+#define LV_SDL_DIRECT_EXIT 0
 
 #define LV_USE_LODEPNG 1
 #define LV_USE_QRCODE 1

@@ -20,6 +20,11 @@
    down from signal context - that segfaults on exit. Override it with a plain
    async-signal-safe exit so the service stops cleanly (systemd sends SIGTERM). */
 static volatile sig_atomic_t g_quit = 0;
+/* set when the SDL window itself is gone: LVGL has already deleted the
+   display (and on SDL_QUIT run lv_deinit), so the exit path must not touch
+   LVGL objects any more - only the things that live outside it, the player
+   child above all. */
+static volatile sig_atomic_t g_sdl_gone = 0;
 
 static void on_term(int sig)
 {
@@ -31,7 +36,13 @@ static void on_term(int sig)
 static int SDLCALL on_sdl_event(void * userdata, SDL_Event * ev)
 {
     LV_UNUSED(userdata);
-    if(ev->type == SDL_QUIT) g_quit = 1;
+    if(ev->type == SDL_QUIT) { g_sdl_gone = 1; g_quit = 1; }
+    /* the WM close button: SDL_WINDOWEVENT_CLOSE first, SDL_QUIT follows
+       when the last window is destroyed. LVGL handles both itself (it
+       deletes the display, and with LV_SDL_DIRECT_EXIT would exit(0) from
+       inside lv_timer_handler), so quit is flagged here, before that. */
+    if(ev->type == SDL_WINDOWEVENT &&
+       ev->window.event == SDL_WINDOWEVENT_CLOSE) { g_sdl_gone = 1; g_quit = 1; }
     if(ev->type == SDL_EVENT_MOUSEWHEEL || ev->type == SDL_MOUSEWHEEL) {
         int mx = 0, my = 0;
         SDL_GetMouseState(&mx, &my);
@@ -75,7 +86,10 @@ int main(void)
         lv_sleep_ms(idle);
     }
 
-    radio_ui_destroy();
+    /* the music is killed first, and by a call that never goes near LVGL -
+       the window was closed, LVGL may already be deinitialized by then */
+    if(g_sdl_gone) radio_ui_stop_playback();
+    else radio_ui_destroy();
     _exit(0);
     return 0;
 }

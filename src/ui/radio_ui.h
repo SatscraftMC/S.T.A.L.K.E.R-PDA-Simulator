@@ -11,6 +11,10 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group);
 /* the panel is rebuilt when the theme or the language changes */
 void radio_ui_destroy(void);
 
+/* kill the player child without going near LVGL - used on exit paths where
+   SDL has already torn the UI down (window closed, lv_deinit done) */
+void radio_ui_stop_playback(void);
+
 /* set the directory to scan for MP3s */
 void radio_ui_set_music_dir(const char * dir);
 

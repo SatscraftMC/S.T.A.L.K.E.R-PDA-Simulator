@@ -6,7 +6,9 @@
 #include "assets/fonts/pda_fonts.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -238,11 +240,31 @@ static void radio_scan_dir(void)
 
 /* ---------- playback ---------- */
 
+/* stop the player child for good. The child is SIGSTOP'd while paused, and
+   a stopped process does not deliver SIGTERM until it runs again - so
+   continue it first, and escalate to SIGKILL if it does not go away, or
+   exit could hang here forever. */
 static void radio_stop(void)
 {
-    if(g_radio.player_pid > 0) {
-        kill(g_radio.player_pid, SIGTERM);
-        waitpid(g_radio.player_pid, NULL, 0);
+    pid_t pid = g_radio.player_pid;
+    if(pid > 0) {
+        kill(pid, SIGCONT);
+        kill(pid, SIGTERM);
+        kill(-pid, SIGTERM);          /* its own process group (setpgid) */
+        int gone = 0;
+        for(int i = 0; i < 25 && !gone; i++) {
+            pid_t r = waitpid(pid, NULL, WNOHANG);
+            if(r == pid || (r < 0 && errno == ECHILD)) gone = 1;
+            else {
+                struct timespec ts = { 0, 40L * 1000L * 1000L };  /* 40 ms */
+                nanosleep(&ts, NULL);
+            }
+        }
+        if(!gone) {
+            kill(pid, SIGKILL);
+            kill(-pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+        }
         g_radio.player_pid = -1;
     }
     g_radio.playing = false;
@@ -268,6 +290,12 @@ static void radio_play_idx(int idx)
 
     pid_t pid = fork();
     if(pid == 0) {
+        /* the player has to die with the app on *every* exit path, not just
+           the clean one: a crash or a kill -9 leaves orphans otherwise.
+           PDEATHSIG is kept across execve and fires when we are reparented. */
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if(getppid() == 1) _exit(0);   /* raced: the parent is already gone */
+        setpgid(0, 0);                 /* own group, so stop() can kill -pid */
         execlp("gst-launch-1.0", "gst-launch-1.0", "-q",
                "playbin", uriprop, NULL);
         _exit(127);
@@ -940,6 +968,11 @@ void radio_ui_destroy(void)
     r->cur_track = -1;
     r->playing = false;
     r->player_pid = -1;
+}
+
+void radio_ui_stop_playback(void)
+{
+    radio_stop();
 }
 
 void radio_ui_set_music_dir(const char * dir)

@@ -2064,9 +2064,12 @@ void pda_shell_retheme(void)
 
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(!sh->panels[i]) continue;
-        if(i == 0) chat_ui_destroy();
-        if(i == 2) radio_ui_destroy();
-        if(i == TAB_COUNT - 2) other_ui_destroy();
+        /* chat/radio/other already delete their own root in _destroy():
+           lv_obj_delete() on the same pointer afterwards would free it
+           a second time (use after free) */
+        if(i == 0) { chat_ui_destroy(); sh->panels[i] = NULL; continue; }
+        if(i == 2) { radio_ui_destroy(); sh->panels[i] = NULL; continue; }
+        if(i == TAB_COUNT - 2) { other_ui_destroy(); sh->panels[i] = NULL; continue; }
         lv_obj_delete(sh->panels[i]);
         sh->panels[i] = NULL;
     }
