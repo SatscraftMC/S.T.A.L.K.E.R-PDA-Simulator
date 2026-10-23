@@ -846,7 +846,7 @@ void radio_ui_destroy(void)
         lv_timer_delete(r->timer);
         r->timer = NULL;
     }
-    lv_kill_tree(r->root);
+    if(r->root) lv_kill_tree(r->root);
     r->root = NULL;
     r->panel = NULL;
     r->title_canvas = NULL;

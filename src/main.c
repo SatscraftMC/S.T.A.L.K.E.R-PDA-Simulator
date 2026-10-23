@@ -1,5 +1,6 @@
 #include "app.h"
 #include "ui/pda_shell.h"
+#include "ui/radio_ui.h"
 
 #include "lvgl/lvgl.h"
 
@@ -18,16 +19,19 @@
 /* SDL installs its own SIGTERM/SIGINT handler that tears the video subsystem
    down from signal context - that segfaults on exit. Override it with a plain
    async-signal-safe exit so the service stops cleanly (systemd sends SIGTERM). */
+static volatile sig_atomic_t g_quit = 0;
+
 static void on_term(int sig)
 {
     (void)sig;
-    _exit(0);
+    g_quit = 1;
 }
 
 /* SDL sees the wheel event before LVGL does; forward it to the map. */
 static int SDLCALL on_sdl_event(void * userdata, SDL_Event * ev)
 {
     LV_UNUSED(userdata);
+    if(ev->type == SDL_QUIT) g_quit = 1;
     if(ev->type == SDL_EVENT_MOUSEWHEEL || ev->type == SDL_MOUSEWHEEL) {
         int mx = 0, my = 0;
         SDL_GetMouseState(&mx, &my);
@@ -65,11 +69,13 @@ int main(void)
 
     pda_app_init();
 
-    while(1) {
+    while(!g_quit) {
         uint32_t idle = lv_timer_handler();
         if(idle > 16) idle = 16;
         lv_sleep_ms(idle);
     }
 
+    radio_ui_destroy();
+    _exit(0);
     return 0;
 }
