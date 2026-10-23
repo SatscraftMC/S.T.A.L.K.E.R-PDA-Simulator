@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
+#include <fcntl.h>
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
 /* The Radio tab: a simple MP3 player styled like the STALKER music player.
@@ -63,6 +65,7 @@ static uint32_t g_icon_bufs[9][BTN_W * BTN_H];
 typedef struct {
     char path[768];
     char name[128];
+    int duration_sec;
 } track_t;
 
 typedef struct text_canvas_t text_canvas_t;
@@ -85,6 +88,8 @@ typedef struct {
     bool playing;
     bool shuffle;
     bool loop;
+    struct timespec play_start;
+    bool has_play_start;
     pid_t player_pid;
     char music_root[512];
     char music_dir[512];
@@ -167,6 +172,43 @@ static const char * folder_basename(const char * path)
     return buf;
 }
 
+static int discover_duration(const char * path)
+{
+    int pipefd[2];
+    if(pipe(pipefd) != 0) return 0;
+    pid_t pid = fork();
+    if(pid == 0) {
+        close(pipefd[0]);
+        if(dup2(pipefd[1], STDOUT_FILENO) < 0) _exit(127);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if(devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        execlp("gst-discoverer-1.0", "gst-discoverer-1.0", path, (char *)NULL);
+        _exit(127);
+    }
+    if(pid < 0) { close(pipefd[0]); close(pipefd[1]); return 0; }
+    close(pipefd[1]);
+    char buf[8192];
+    size_t total = 0;
+    ssize_t n;
+    while(total < sizeof(buf) - 1) {
+        n = read(pipefd[0], buf + total, sizeof(buf) - 1 - total);
+        if(n <= 0) break;
+        total += (size_t)n;
+    }
+    buf[total] = 0;
+    close(pipefd[0]);
+    waitpid(pid, NULL, 0);
+    char * p = strstr(buf, "Duration:");
+    if(!p) return 0;
+    p += strlen("Duration:");
+    while(*p == ' ') p++;
+    int h = 0, m = 0, s = 0;
+    if(sscanf(p, "%d:%d:%d", &h, &m, &s) == 3) return h * 3600 + m * 60 + s;
+    if(sscanf(p, "%d:%d", &m, &s) == 2) return m * 60 + s;
+    return 0;
+}
+
 static void radio_scan_dir(void)
 {
     g_radio.n_tracks = 0;
@@ -184,6 +226,7 @@ static void radio_scan_dir(void)
         snprintf(full, sizeof(full), "%s/%s", g_radio.music_dir, e->d_name);
         snprintf(t->path, sizeof(t->path), "%s", full);
         snprintf(t->name, sizeof(t->name), "%.*s", (int)sizeof(t->name) - 1, e->d_name);
+        t->duration_sec = discover_duration(full);
         g_radio.n_tracks++;
     }
     closedir(d);
@@ -199,6 +242,7 @@ static void radio_stop(void)
         g_radio.player_pid = -1;
     }
     g_radio.playing = false;
+    g_radio.has_play_start = false;
 }
 
 static void radio_play_idx(int idx)
@@ -225,6 +269,8 @@ static void radio_play_idx(int idx)
     g_radio.player_pid = pid;
     g_radio.playing = true;
     g_radio.cur_track = idx;
+    clock_gettime(CLOCK_MONOTONIC, &g_radio.play_start);
+    g_radio.has_play_start = true;
 }
 
 static void radio_next(void)
@@ -635,7 +681,19 @@ static void radio_build_track_list(void)
         lv_label_set_text(lbl, track_short_name(r->tracks[i].name));
         lv_obj_set_style_text_color(lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
         lv_obj_set_style_text_font(lbl, &pda_font_mono_10, LV_PART_MAIN);
-        lv_obj_set_width(lbl, lv_pct(100));
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(lbl, 520);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+
+        char dbuf[16];
+        int ds = r->tracks[i].duration_sec;
+        if(ds > 0) snprintf(dbuf, sizeof(dbuf), "%02d:%02d", ds / 60, ds % 60);
+        else snprintf(dbuf, sizeof(dbuf), "--:--");
+        lv_obj_t * dur = lv_label_create(b);
+        lv_label_set_text(dur, dbuf);
+        lv_obj_set_style_text_color(dur, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
+        lv_obj_set_style_text_font(dur, &pda_font_mono_10, LV_PART_MAIN);
+        lv_obj_align(dur, LV_ALIGN_RIGHT_MID, -4, 0);
     }
 }
 
@@ -704,10 +762,13 @@ lv_obj_t * radio_ui_create(lv_obj_t * parent, lv_group_t * group)
     lv_obj_set_scrollable(inner, false);
     lv_obj_set_clickable(inner, false);
 
-    /* title strip above the panel - canvas drawn text */
+    /* title strip above the panel - styled like the Other tab strip title */
+    grit_square(p, PANEL_X + 10, PANEL_Y - 20, 8, PDA_MSG_ACCENT);
+    grit_square(p, PANEL_X + PANEL_W - 18, PANEL_Y - 20, 8, PDA_MSG_ACCENT);
     r->title_canvas = text_canvas_create(p,
         PANEL_X + PANEL_W / 2 - 60, PANEL_Y - 24, 120, 20,
-        "Music Player", &pda_font_mono_14, PDA_TITLE);
+        "Music Player", &pda_font_mono_10, PDA_MSG_TEXT);
+    grit_rule(p, PANEL_X, PANEL_Y - 2, PANEL_W, false, PDA_RULE);
 
     /* row 1: Shuffle Off  04:18  Loop Off - cyan text */
     r->shuffle_canvas = text_canvas_create(inner,
@@ -952,9 +1013,15 @@ static void refresh(void)
         &pda_font_mono_10, PDA_MSG_ACCENT);
 
     char tbuf[16];
+    int elapsed = 0;
+    if(g_radio.playing && g_radio.has_play_start) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        elapsed = (int)(now.tv_sec - g_radio.play_start.tv_sec);
+        if(elapsed < 0) elapsed = 0;
+    }
     snprintf(tbuf, sizeof(tbuf), "%02d:%02d",
-             g_radio.playing ? (g_radio.cur_track / 60) : 0,
-             g_radio.playing ? (g_radio.cur_track % 60) : 0);
+             elapsed / 60, elapsed % 60);
     text_canvas_set_text(g_radio.time_canvas,
         tbuf, &pda_font_mono_10, PDA_MSG_ACCENT);
 
