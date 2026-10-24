@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.4.3-alpha**
+**v0.5.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -66,7 +66,8 @@ sudo apt install cmake libsdl2-dev libsdl2-image-dev libpng-dev zlib1g-dev nodej
 ./build.sh                # -> build/pda
 ./build/pda               # 800x480 SDL window
 # the test suites drive the real window and need:
-sudo apt install gnome-screenshot wmctrl python3-pil python3-xlib
+sudo apt install gnome-screenshot wmctrl python3-pil python3-xlib libzbar0t64
+python3 -m pip install --user pyzbar   # the Wallet test decodes the QR on screen
 ```
 
 ## Map Packs

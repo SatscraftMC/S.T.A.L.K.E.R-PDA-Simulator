@@ -190,6 +190,65 @@ def app_alive(p, logpath):
     return bad is None
 
 
+def decode_qr(path):
+    """what the QR codes in this screenshot say (None when there is none)"""
+    try:
+        from pyzbar.pyzbar import decode
+        from PIL import Image
+    except ImportError as exc:
+        note(False, "the wallet QR checks need pyzbar and pillow "
+                    "(apt install libzbar0t64; pip install pyzbar): %s" % exc)
+        return None
+    for sym in decode(Image.open(path)):
+        if sym.type == "QRCODE":
+            return sym.data.decode("utf-8", "replace")
+    return None
+
+
+def last_invoice(logpath):
+    """the bolt11 the wallet made last - it prints one every time it makes one"""
+    try:
+        with open(logpath, errors="replace") as fh:
+            got = [line.split("invoice:", 1)[1].strip()
+                   for line in fh if "invoice:" in line]
+    except OSError:
+        return None
+    return got[-1] if got else None
+
+
+def read_mock_balance(path):
+    """what the preview backend wrote to its state file"""
+    try:
+        with open(path) as fh:
+            m = re.search(r"balance\s*=\s*(-?\d+)", fh.read())
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
+
+
+def qr_bright(path, x0=32, x1=328, y0=150, y1=442):
+    """white pixels inside the REQUEST screen's QR frame.
+
+    The coordinates are the panel's own; the screenshot adds the window
+    decoration on top (measured, not assumed). A drawn QR code fills the
+    frame with white, the PAID screen that replaces it does not. """
+    try:
+        from PIL import Image
+    except ImportError:
+        return -1
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    off = h - 480                       # the decoration above the 800x480 client
+    px = im.load()
+    n = 0
+    for y in range(y0 + 34 + off, min(y1 + 34 + off, h)):
+        for x in range(x0, min(x1, w)):
+            r, g, b = px[x, y]
+            if r > 225 and g > 225 and b > 225:
+                n += 1
+    return n
+
+
 # --------------------------------------------------------------------------
 
 
@@ -790,6 +849,138 @@ def test_mesh_map():
         stop(p, f)
 
 
+def test_wallet():
+    print("15. the Wallet tab", flush=True)
+
+    # the preview backend's state file: the tests move money, and that must
+    # not touch whatever the developer's own wallet.mock holds
+    mockfile = os.path.join(LOGDIR, "wallet.mock")
+
+    # no backend configured: the honest "not set up" screen (the stub that
+    # used to say "Balance: 0 sats" is gone, and must not come back)
+    p, f, logpath = start({"PDA_START_TAB": "5"}, "wallet_unset")
+    time.sleep(2.6)
+    note(lit_pixels(shot("wallet_unset"), y0=69) > 20,
+         "the wallet tab renders without a backend")
+    note("Balance: 0 sats" not in open(os.path.join(
+        ROOT, "src", "ui", "pda_shell.c")).read(),
+        "the old balance stub is gone from the shell")
+    note(app_alive(p, logpath), "the app is alive with no backend")
+    stop(p, f)
+
+    # PDA_WALLET_BACKEND=mock: the balance screen
+    if os.path.exists(mockfile):
+        os.unlink(mockfile)
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile},
+                          "wallet_mock")
+    time.sleep(2.6)
+    note(lit_pixels(shot("wallet_mock"), y0=69) > 20,
+         "the wallet tab renders the mock balance")
+    note(app_alive(p, logpath), "the app is alive with the mock backend")
+    stop(p, f)
+
+    # a backend that does not exist: the error screen, and the app lives
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "lightningd"},
+                          "wallet_bad")
+    time.sleep(2.6)
+    note(lit_pixels(shot("wallet_bad"), y0=69) > 20,
+         "the wallet tab renders the error of an unknown backend")
+    note(app_alive(p, logpath), "the app is alive with an unknown backend")
+    stop(p, f)
+
+    # ---- REQUEST: the QR code, the amount keypad, the settle ----
+    # app coordinates: the panel sits under the 34px tab row
+    REQUEST_BTN = (142, 390)
+    STEP_MINUS10 = (212, 101)
+    MEMO_FIELD = (200, 154)
+    NEW_REQUEST = (438, 289)
+    BACK_BTN = (730, 49)
+    DEFAULT_BALANCE = 1234567
+
+    if os.path.exists(mockfile):
+        os.unlink(mockfile)
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile,
+                           # the retheme step below jumps straight there
+                           "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "3"},
+                          "wallet_req")
+    try:
+        time.sleep(2.6)
+        click_once(*REQUEST_BTN)
+        time.sleep(1.0)
+        path = shot("wallet_req")
+        note(lit_pixels(path, y0=180) > 500, "the REQUEST screen comes up")
+
+        inv1 = last_invoice(logpath)
+        qr1 = decode_qr(path)
+        note(qr1 is not None and inv1 is not None and qr1 == inv1,
+             "the QR on the screen decodes back to the invoice the wallet made")
+
+        # the amount keypad: -10 sats, a new invoice, a new code
+        click_once(*STEP_MINUS10)
+        time.sleep(1.0)
+        path = shot("wallet_step")
+        inv2 = last_invoice(logpath)
+        qr2 = decode_qr(path)
+        note(qr2 is not None and qr2 == inv2 and qr2 != inv1,
+             "the amount keypad makes a new invoice and a new QR code")
+
+        lit_before = qr_bright(path)
+        note(lit_before > 5000, f"the QR code fills the frame ({lit_before} white pixels)")
+
+        # the mock settles a few seconds later, and the screen flips
+        time.sleep(8.5)
+        path = shot("wallet_paid")
+        lit_after = qr_bright(path)
+        note(lit_after < lit_before // 10,
+             f"the payment flips the screen to PAID ({lit_before} -> {lit_after} white pixels)")
+        balance = read_mock_balance(mockfile)
+        note(balance == DEFAULT_BALANCE + 490,
+             f"the preview backend paid it out of the balance ({balance})")
+
+        # a theme change tears every panel down and builds it again. The
+        # invoice is settled and stable, so the rebuild must come back with
+        # exactly the same one - and with the buttons still on it.
+        click_once(600, 22)                    # the Other tab
+        time.sleep(0.5)
+        click_once(599, 112)                   # cycle the colour scheme
+        time.sleep(2.0)
+        click_once(120 + 5 * 80, 22)           # and back to the Wallet tab
+        time.sleep(1.0)
+        note(last_invoice(logpath) == inv2,
+             "a theme change rebuilds the screen without making a new invoice")
+
+        # NEW REQUEST: another invoice, the code comes back - and this can
+        # only happen if the rebuilt panel really is the REQUEST screen
+        click_once(*NEW_REQUEST)
+        time.sleep(1.0)
+        path = shot("wallet_newreq")
+        inv3 = last_invoice(logpath)
+        qr3 = decode_qr(path)
+        note(qr3 is not None and qr3 == inv3 and qr3 != inv2,
+             "NEW REQUEST makes another invoice and puts a QR code back")
+
+        # the memo: what it is for goes into the invoice that is made next
+        click_once(*MEMO_FIELD)
+        time.sleep(0.4)
+        type_text("coffee")
+        time.sleep(1.2)
+        path = shot("wallet_memo")
+        inv4 = last_invoice(logpath)
+        qr4 = decode_qr(path)
+        note(qr4 is not None and qr4 == inv4 and qr4 != qr3,
+             "typing a memo makes a new invoice for it")
+
+        # and BACK goes home
+        click_once(*BACK_BTN)
+        time.sleep(0.8)
+        note(qr_bright(shot("wallet_back")) < 500, "BACK leaves the REQUEST screen")
+        note(app_alive(p, logpath), "the app is alive through the whole wallet flow")
+    finally:
+        stop(p, f)
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -805,6 +996,7 @@ TESTS = {
     "layers": test_map_layers,
     "waypoints": test_waypoints,
     "mesh": test_mesh_map,
+    "wallet": test_wallet,
 }
 
 def main():

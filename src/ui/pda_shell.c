@@ -3,6 +3,7 @@
 #include "ui/chat_ui.h"
 #include "ui/other_ui.h"
 #include "ui/radio_ui.h"
+#include "ui/wallet_ui.h"
 #include "ui/prefs.h"
 #include "ui/i18n.h"
 #include "ui/format.h"
@@ -12,6 +13,7 @@
 #include "gps.h"
 #include "chat/chat.h"
 #include "poi.h"
+#include "wallet/wallet.h"
 
 #include <string.h>
 #include <time.h>
@@ -76,7 +78,10 @@ static const tr_id_t g_tab_ids[TAB_COUNT] = {
     TR_TAB_WALLET, TR_TAB_OTHER
 };
 
-/* the tabs that are still stubs */
+/* the panels that are still stubs (the other titles/bodies here are the
+   leftovers of the same table - Contacts and Camera are the only stubs
+   left; the Wallet body was the old fake-balance stub until wallet_ui.c
+   took the tab over, see wallet_build_plan.md) */
 static const char * const g_panel_titles[TAB_COUNT - 1] = {
     "Messages", "Contacts", "Radio", "Camera", "Wallet", "Other"
 };
@@ -85,7 +90,7 @@ static const char * const g_panel_bodies[TAB_COUNT - 1] = {
     "No contacts yet.",
     "Signal: none",
     "No camera feed yet.",
-    "Balance: 0 sats",
+    "",
     "Nothing to tune yet."
 };
 
@@ -1988,6 +1993,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
 
     prefs_init();      /* the saved settings, before anything reads them */
     chat_init();
+    wallet_init();     /* which wallet backend, before the Wallet panel asks */
     waypoints_load(sh);   /* the route the user planned last time */
 
     /* the settings that change how everything looks and reads */
@@ -2025,6 +2031,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
         else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, group); /* Radio */
+        else if(i == 4) sh->panels[i] = wallet_ui_create(sh->view, group); /* Wallet */
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, group);
         else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
     }
@@ -2069,6 +2076,10 @@ void pda_shell_retheme(void)
            a second time (use after free) */
         if(i == 0) { chat_ui_destroy(); sh->panels[i] = NULL; continue; }
         if(i == 2) { radio_ui_destroy(); sh->panels[i] = NULL; continue; }
+        /* wallet_ui_destroy() kills the animations and deletes the tree
+           itself (and with it the keypad group's handles), so the shell
+           must not touch the pointer either */
+        if(i == 4) { wallet_ui_destroy(); sh->panels[i] = NULL; continue; }
         if(i == TAB_COUNT - 2) { other_ui_destroy(); sh->panels[i] = NULL; continue; }
         lv_obj_delete(sh->panels[i]);
         sh->panels[i] = NULL;
@@ -2076,6 +2087,7 @@ void pda_shell_retheme(void)
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, sh->group);
         else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, sh->group);
+        else if(i == 4) sh->panels[i] = wallet_ui_create(sh->view, sh->group);
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, sh->group);
         else sh->panels[i] = build_panel(sh->view, g_panel_titles[i], g_panel_bodies[i]);
     }
