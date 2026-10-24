@@ -13,28 +13,27 @@
 
 /* The Wallet tab.
  *
- * Two screens today, four when the plan is done: the balance (which is also
- * where "not set up" and the error live), and REQUEST - an amount, a memo
- * and a QR code of a bolt11 the backend just made. The buttons that need a
- * screen this build does not have are there to be seen and say why they
- * cannot be pressed; nothing here pretends to work.
+ * Five screens: the balance (which is also where "not set up" and the error
+ * live), REQUEST - an amount, a memo and a QR code of a bolt11 the backend
+ * just made - SEND, where an invoice from a paste or from PDA_INVOICE is
+ * offered for payment, CONFIRM, where its amount and fee are shown before
+ * the PAY button will move anything, and HISTORY, the rows the backend has
+ * kept. SCAN stays dimmed with its reason: the camera is a screen this
+ * build does not have, and nothing here pretends to work.
  *
- *   MAIN                                REQUEST
- *   +--------------------------------+  +--------------------------------+
- *   | WALLET   MOCK - NO REAL MONEY  |  | REQUEST             [ BACK ]   |
- *   |        1 234 567               |  | AMOUNT  500 sats [-10][-1]...  |
- *   |            sats                |  | MEMO    [ coffee           ]   |
- *   |      0.01234567 BTC            |  | +-----------------+ lnbc50n1p..|
- *   | STATE  mock preview            |  | |  # # #  # #     | expires   |
- *   | NET    not connected           |  | |  #  # #   #     | 04:59     |
- *   |--------------------------------|  | +-----------------+ waiting...|
- *   | [REQUEST] [SEND] [HISTORY] ... |  |             [ NEW REQUEST ]    |
- *   +--------------------------------+  +--------------------------------+
+ *   MAIN                SEND                CONFIRM PAY
+ *   +--------------+  +-----------------+  +------------------+
+ *   | WALLET  MOCK |  | INVOICE         |  | INVOICE lnbc...  |
+ *   |   1 234 567  |  | [............ ] |  | MEMO    coffee   |
+ *   |     sats     |  | MEMO [coffee  ] |  | AMOUNT  500 sats |
+ *   | [REQ][SEND]  |  | [CHECK] [SCAN ] |  | fee     1 sats   |
+ *   | [HIST][SCAN] |  | (the reason)    |  | [CANCEL]  [PAY]  |
+ *   +--------------+  +-----------------+  +------------------+
  *
- * Everything the REQUEST screen shows comes from wallet.h: it makes an
- * invoice, reads it back, and is polled for the moment the backend says it
- * was paid. The mock behind that settles on a timer, so the PAID screen can
- * be seen before a real backend exists. */
+ * Everything these screens show comes from wallet.h: check, fee, pay and
+ * history are the seam, and the mock behind them moves numbers on a timer
+ * and writes them to disk. A real backend replaces the mock and the screens
+ * do not change. */
 
 #define BACK_W        800
 #define BACK_H        452
@@ -88,9 +87,76 @@
 #define AMOUNT_MIN    1
 #define AMOUNT_MAX    100000000LL      /* one bitcoin, in sats */
 
+/* the SEND screen */
+#define SEND_LBL_Y    44
+#define SEND_INV_Y    58
+#define SEND_INV_H    64
+#define SEND_MEM_Y    132
+#define SEND_MEMO_Y   146
+#define SEND_MEMO_H   28
+#define SEND_FLD_X    24
+#define SEND_FLD_W    752
+#define SEND_RULE_Y   186
+#define SEND_BTN_Y    198
+#define SEND_BTN_H    32
+#define SEND_CHECK_X  24
+#define SEND_CHECK_W  160
+#define SEND_SCAN_X   208
+#define SEND_SCAN_W   160
+#define SEND_WHY_Y    (SEND_BTN_Y + SEND_BTN_H + 4)
+#define SEND_ST_Y     256
+#define SEND_HINT_Y   298
+
+/* the CONFIRM screen (and the face that says the payment went out) */
+#define CONF_LBL_Y    44
+#define CONF_INV_Y    58
+#define CONF_MEM_Y    88
+#define CONF_MEMO_Y   102
+#define CONF_RULE_Y   136
+#define CONF_K_X      24
+#define CONF_K_W      180
+#define CONF_V_X      220
+#define CONF_V_W      556
+#define CONF_AMT_Y    156
+#define CONF_FEE_Y    196
+#define CONF_RULE2_Y  238
+#define CONF_ST_Y     254
+#define CONF_BTN_Y    292
+#define CONF_BTN_H    34
+#define CONF_CANC_X   200
+#define CONF_PAY_X    420
+#define CONF_BTN_W    180
+#define CONF_MOCK_Y   346
+#define SENT_TITLE_Y  150
+#define SENT_AMT_Y    196
+#define SENT_NOTE_Y   224
+#define SENT_BAL_Y    248
+#define SENT_BTN_Y    292
+
+/* the HISTORY screen */
+#define HIST_LIST_X   16
+#define HIST_LIST_Y   44
+#define HIST_LIST_W   768
+#define HIST_LIST_H   364
+#define HIST_ROW_H    24
+#define HIST_MAX      64          /* the seam holds no more than this */
+#define H_DIR_X       6
+#define H_DIR_W       34
+#define H_AMT_X       46
+#define H_AMT_W       110
+#define H_MEMO_X      168
+#define H_MEMO_W      344
+#define H_DATE_X      524
+#define H_DATE_W      84
+#define H_STAT_X      624
+#define H_STAT_W      122
+
 enum {
     SCREEN_MAIN = 0,
-    SCREEN_REQUEST = 1
+    SCREEN_REQUEST = 1,
+    SCREEN_SEND = 2,
+    SCREEN_CONFIRM = 3,
+    SCREEN_HISTORY = 4
 };
 
 typedef struct {
@@ -117,6 +183,17 @@ typedef struct {
     lv_obj_t * hint;
     uint32_t * qr_px;         /* the canvas buffer - ours to free */
     int inv_state;            /* wallet_invoice_state_t last applied, -1 = none */
+
+    /* the SEND screen */
+    lv_obj_t * send_inv;      /* the field the bolt11 sits in */
+    lv_obj_t * send_memo;
+    lv_obj_t * send_status;   /* where a refused invoice is explained */
+
+    /* the CONFIRM screen */
+    lv_obj_t * conf_status;
+
+    /* the HISTORY screen */
+    lv_obj_t * hist_list;
 } wallet_ui_t;
 
 static wallet_ui_t g_wui;
@@ -127,6 +204,21 @@ static int s_screen = SCREEN_MAIN;
 static int64_t s_amount = 500;
 static char s_memo[48];
 static char s_last_err[192];
+
+/* the same, for the payment: the invoice survives a theme change so the
+   confirm screen comes back with the same numbers on it */
+static char s_invoice[640];
+static bool s_invoice_loaded;  /* PDA_INVOICE has been looked for already */
+static char s_pay_memo[48];
+static char s_send_err[192];
+static int64_t s_confirm_sats;
+static int64_t s_confirm_fee;
+static bool s_sent;            /* the payment went through: the result face */
+
+/* the newest history row the HISTORY screen has drawn, so a payment that
+   lands while it is open can be noticed without rebuilding every tick */
+static wallet_tx_t s_hist_top;
+static bool s_hist_top_valid;
 
 /* ---------- small helpers ---------- */
 
@@ -223,8 +315,8 @@ static void build_title(lv_obj_t * p, const char * banner)
     grit_rule(p, 6, TITLE_RULE_Y, 788, false, PDA_RULE);
 }
 
-/* a button that is there to be seen, not to be pressed: disabled, outside
- * the keypad group, with its reason underneath */
+/* a button that is there to be seen, not to be pressed: outside the keypad
+ * group, not clickable, and saying why underneath */
 static void dim_button(lv_obj_t * p, const char * txt, int x, int y, int w)
 {
     lv_obj_t * b = lv_button_create(p);
@@ -245,10 +337,14 @@ static void dim_button(lv_obj_t * p, const char * txt, int x, int y, int w)
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_text_font(l, &pda_font_mono_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_TIME), LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
     lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
 
-    lv_obj_add_state(b, LV_STATE_DISABLED);
+    /* No LV_STATE_DISABLED here on purpose. The default theme styles that
+       state with its own grey plate and a recoloured label, and it wins the
+       cascade for a state the styles above were not written for - the plate
+       came out light grey and the label with it, on this screen unreadable.
+       Not clickable (and never in the keypad group) is what stops the press. */
     lv_obj_set_clickable(b, false);
 }
 
@@ -288,17 +384,61 @@ static void live_button(lv_obj_t * p, const char * txt, int x, int y, int w, int
     if(group) lv_group_add_obj(group, b);
 }
 
+/* a text field: the plate the REQUEST memo wears, for every field here */
+static lv_obj_t * field(lv_obj_t * p, int x, int y, int w, int h,
+                        const lv_font_t * font, bool one_line,
+                        const char * txt, int max_len)
+{
+    lv_obj_t * ta = lv_textarea_create(p);
+    if(one_line) lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, (uint32_t)max_len);
+    lv_textarea_set_text(ta, txt ? txt : "");
+    lv_obj_set_pos(ta, x, y);
+    lv_obj_set_size(ta, w, h);
+    /* the field must not shrink to the size of its text */
+    lv_obj_set_style_min_width(ta, w, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(ta, font, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(ta, 6, LV_PART_MAIN);
+    lv_caret_init(ta);
+    if(g_wui.group) lv_group_add_obj(g_wui.group, ta);
+    return ta;
+}
+
 /* ---------- forward declarations ---------- */
 
 static void on_open_request(lv_event_t * e);
+static void on_open_send(lv_event_t * e);
+static void on_open_history(lv_event_t * e);
 static void on_back(lv_event_t * e);
 static void on_new_request(lv_event_t * e);
 static void on_step(lv_event_t * e);
 static void on_memo(lv_event_t * e);
+static void on_pay_memo(lv_event_t * e);
+static void on_check(lv_event_t * e);
+static void on_cancel(lv_event_t * e);
+static void on_pay(lv_event_t * e);
+static void on_sent_done(lv_event_t * e);
 static void build_current(void);
 static void content_clear(void);
 static void regenerate(void);
 static void refresh_request(void);
+static void refresh_history(void);
+static void rebuild(void);
+
+/* every screen change here is the same two steps: let the tree go, build
+   the one that was asked for */
+static void rebuild(void)
+{
+    content_clear();
+    build_current();
+}
 
 /* ---------- the three states ---------- */
 
@@ -357,8 +497,9 @@ static void build_ready(lv_obj_t * p)
     line(p, tr(TR_WALLET_NET_OFF), 340, 208, 300,
          &pda_font_mono_10, PDA_MSG_TEXT);
 
-    /* the actions. Only one of them has a screen behind it in this build;
-       the others say what they are waiting for instead of looking broken */
+    /* the actions. Three of them have a screen behind them; SCAN needs the
+       camera, which this build does not have, so it says so instead of
+       looking broken */
     grit_rule(p, 6, MAIN_RULE_Y, 788, false, PDA_RULE);
 
     live_button(p, tr(TR_WALLET_REQUEST), MAIN_BTN_X0, MAIN_BTN_Y,
@@ -368,11 +509,11 @@ static void build_ready(lv_obj_t * p)
     int x2 = x1 + (MAIN_BTN_W + MAIN_BTN_GAP);
     int x3 = x2 + (MAIN_BTN_W + MAIN_BTN_GAP);
 
-    dim_button(p, tr(TR_SEND), x1, MAIN_BTN_Y, MAIN_BTN_W);
-    why_line(p, tr(TR_WALLET_WHY_NEXT), x1, MAIN_WHY_Y, MAIN_BTN_W);
+    live_button(p, tr(TR_SEND), x1, MAIN_BTN_Y,
+                MAIN_BTN_W, MAIN_BTN_H, on_open_send, NULL, g_wui.group);
 
-    dim_button(p, tr(TR_WALLET_HISTORY), x2, MAIN_BTN_Y, MAIN_BTN_W);
-    why_line(p, tr(TR_WALLET_WHY_NEXT), x2, MAIN_WHY_Y, MAIN_BTN_W);
+    live_button(p, tr(TR_WALLET_HISTORY), x2, MAIN_BTN_Y,
+                MAIN_BTN_W, MAIN_BTN_H, on_open_history, NULL, g_wui.group);
 
     dim_button(p, tr(TR_WALLET_SCAN), x3, MAIN_BTN_Y, MAIN_BTN_W);
     why_line(p, tr(TR_WALLET_WHY_CAMERA), x3, MAIN_WHY_Y, MAIN_BTN_W);
@@ -547,13 +688,15 @@ static void show_invoice(void)
     refresh_request();
 }
 
-/* the mock settles on the wall clock, so the panel is polled for it */
+/* the mock settles on the wall clock, so the panel is polled for it - and
+   it keeps its own time wherever in the tab we happen to be looking */
 static void wallet_tick(lv_timer_t * t)
 {
     (void)t;
-    if(s_screen != SCREEN_REQUEST) return;
     wallet_poll();
-    refresh_request();
+
+    if(s_screen == SCREEN_REQUEST) refresh_request();
+    else if(s_screen == SCREEN_HISTORY) refresh_history();
 }
 
 /* a new invoice for whatever is on the screen now */
@@ -610,14 +753,142 @@ static void on_memo(lv_event_t * e)
     regenerate();               /* a different memo, a different invoice */
 }
 
-/* the title the REQUEST screen wears: the banner stays, BACK takes the
-   right-hand end of the strip where the balance screen has nothing */
-static void build_request_title(lv_obj_t * p)
+/* ---------- SEND, CONFIRM, HISTORY ---------- */
+
+/* The first time SEND is opened the simulator is handed an invoice to pay,
+ * because there is no camera to scan one with. After that the field is the
+ * user's own: a payment that went through clears it, so the same invoice
+ * cannot be offered twice. */
+static void load_env_invoice(void)
+{
+    if(s_invoice_loaded) return;
+    s_invoice_loaded = true;
+    const char * v = getenv("PDA_INVOICE");
+    if(v && *v) snprintf(s_invoice, sizeof(s_invoice), "%s", v);
+}
+
+/* what the field holds, taken straight off the widget so nothing typed
+ * into it can be missed */
+static void read_send_invoice(void)
+{
+    if(!g_wui.send_inv) return;
+    const char * txt = lv_textarea_get_text(g_wui.send_inv);
+    if(!txt) return;
+    snprintf(s_invoice, sizeof(s_invoice), "%s", txt);
+}
+
+static void set_send_status(const char * txt, bool good)
+{
+    if(!g_wui.send_status) return;
+    lv_label_set_text(g_wui.send_status, txt ? txt : "");
+    lv_obj_set_style_text_color(g_wui.send_status,
+                                lv_color_hex(good ? PDA_MSG_ACCENT
+                                                  : PDA_CARRIER_DOWN),
+                                LV_PART_MAIN);
+}
+
+static void on_open_send(lv_event_t * e)
+{
+    (void)e;
+    if(wallet_state() != WALLET_READY) return;
+    load_env_invoice();
+    s_send_err[0] = 0;
+    s_sent = false;
+    s_screen = SCREEN_SEND;
+    rebuild();
+}
+
+static void on_open_history(lv_event_t * e)
+{
+    (void)e;
+    if(wallet_state() != WALLET_READY) return;
+    s_screen = SCREEN_HISTORY;
+    rebuild();
+}
+
+static void on_pay_memo(lv_event_t * e)
+{
+    lv_obj_t * ta = lv_event_get_current_target(e);
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt) txt = "";
+    if(strcmp(txt, s_pay_memo) == 0) return;
+    snprintf(s_pay_memo, sizeof(s_pay_memo), "%s", txt);
+}
+
+/* ask the backend what the field holds: the amount the confirm screen is
+ * about to show, or the reason there is nothing to show */
+static void on_check(lv_event_t * e)
+{
+    (void)e;
+    read_send_invoice();
+    s_send_err[0] = 0;
+
+    int64_t sats = 0;
+    if(!wallet_check_invoice(s_invoice, &sats, s_send_err, sizeof(s_send_err))) {
+        if(!s_send_err[0])
+            snprintf(s_send_err, sizeof(s_send_err), "%s",
+                     "that invoice cannot be paid");
+        set_send_status(s_send_err, false);
+        return;
+    }
+
+    s_confirm_sats = sats;
+    s_confirm_fee = wallet_fee_sats(sats);
+    s_screen = SCREEN_CONFIRM;
+    rebuild();
+}
+
+static void on_cancel(lv_event_t * e)
+{
+    (void)e;
+    s_send_err[0] = 0;
+    s_screen = SCREEN_SEND;
+    rebuild();
+}
+
+/* the moment the numbers move */
+static void on_pay(lv_event_t * e)
+{
+    (void)e;
+    s_send_err[0] = 0;
+
+    int64_t paid = 0;
+    if(!wallet_pay_invoice(s_invoice, s_pay_memo, &paid,
+                           s_send_err, sizeof(s_send_err))) {
+        if(!s_send_err[0])
+            snprintf(s_send_err, sizeof(s_send_err), "%s",
+                     "the payment did not go through");
+        if(g_wui.conf_status) {
+            lv_label_set_text(g_wui.conf_status, s_send_err);
+            lv_obj_set_style_text_color(g_wui.conf_status,
+                                        lv_color_hex(PDA_CARRIER_DOWN), LV_PART_MAIN);
+        }
+        return;
+    }
+
+    /* it has been paid: the field must not offer it a second time */
+    s_invoice[0] = 0;
+    s_sent = true;
+    rebuild();
+}
+
+static void on_sent_done(lv_event_t * e)
+{
+    (void)e;
+    s_sent = false;
+    s_screen = SCREEN_MAIN;
+    rebuild();
+}
+
+/* the strip every screen below the balance wears: the banner stays, and
+   BACK takes the right-hand end of it where the balance screen has nothing
+   (CONFIRM is the exception - CANCEL is the way back from there) */
+static void build_sub_title(lv_obj_t * p, tr_id_t title, bool back)
 {
     grit_square(p, 22, 9, 8, PDA_MSG_ACCENT);
     grit_square(p, 770, 9, 8, PDA_MSG_ACCENT);
 
-    lv_obj_t * t = line(p, tr(TR_WALLET_REQUEST), 0, 5, BACK_W,
+    lv_obj_t * t = line(p, tr(title), 0, 5, BACK_W,
                         &pda_font_mono_16, PDA_MSG_TEXT);
     center_line(t);
 
@@ -626,15 +897,16 @@ static void build_request_title(lv_obj_t * p)
     lv_label_set_long_mode(b, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(b, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
 
-    live_button(p, tr(TR_WALLET_BACK), BACK_BTN_X, BACK_BTN_Y,
-                BACK_BTN_W, BACK_BTN_H, on_back, NULL, g_wui.group);
+    if(back)
+        live_button(p, tr(TR_WALLET_BACK), BACK_BTN_X, BACK_BTN_Y,
+                    BACK_BTN_W, BACK_BTN_H, on_back, NULL, g_wui.group);
 
     grit_rule(p, 6, TITLE_RULE_Y, 788, false, PDA_RULE);
 }
 
 static void build_request(lv_obj_t * p)
 {
-    build_request_title(p);
+    build_sub_title(p, TR_WALLET_REQUEST, true);
 
     /* --- the amount and the keypad that moves it --- */
     line(p, tr(TR_WALLET_AMOUNT), AM_X, AM_LBL_Y, AM_W,
@@ -655,26 +927,8 @@ static void build_request(lv_obj_t * p)
     line(p, tr(TR_WALLET_MEMO), MEM_X, MEM_LBL_Y, MEM_W,
          &pda_font_mono_10, PDA_MSG_SYS);
 
-    lv_obj_t * ta = lv_textarea_create(p);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_max_length(ta, (uint32_t)(sizeof(s_memo) - 1));
-    lv_textarea_set_text(ta, s_memo);
-    lv_obj_set_pos(ta, MEM_X, MEM_Y);
-    lv_obj_set_size(ta, MEM_W, MEM_H);
-    /* the field must not shrink to the size of its text */
-    lv_obj_set_style_min_width(ta, MEM_W, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(ta, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
-    lv_obj_set_style_text_font(ta, &pda_font_mono_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_color(ta, lv_color_hex(PDA_MSG_SYS), LV_PART_TEXTAREA_PLACEHOLDER);
-    lv_obj_set_style_pad_all(ta, 4, LV_PART_MAIN);
-    lv_obj_set_style_pad_left(ta, 6, LV_PART_MAIN);
-    lv_caret_init(ta);
-    g_wui.memo = ta;
-    if(g_wui.group) lv_group_add_obj(g_wui.group, ta);
+    g_wui.memo = field(p, MEM_X, MEM_Y, MEM_W, MEM_H, &pda_font_mono_14, true,
+                       s_memo, (int)(sizeof(s_memo) - 1));
 
     grit_rule(p, 6, REQ_RULE_Y, 788, false, PDA_RULE);
 
@@ -740,13 +994,234 @@ static void build_request(lv_obj_t * p)
     show_invoice();
 }
 
+/* ---------- SEND ---------- */
+
+static void build_send(lv_obj_t * p)
+{
+    build_sub_title(p, TR_SEND, true);
+    load_env_invoice();
+
+    line(p, tr(TR_WALLET_INVOICE), SEND_FLD_X, SEND_LBL_Y, 300,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    g_wui.send_inv = field(p, SEND_FLD_X, SEND_INV_Y, SEND_FLD_W, SEND_INV_H,
+                           &pda_font_mono_10, false, s_invoice,
+                           (int)(sizeof(s_invoice) - 1));
+
+    line(p, tr(TR_WALLET_MEMO), SEND_FLD_X, SEND_MEM_Y, 300,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    g_wui.send_memo = field(p, SEND_FLD_X, SEND_MEMO_Y, SEND_FLD_W, SEND_MEMO_H,
+                            &pda_font_mono_14, true, s_pay_memo,
+                            (int)(sizeof(s_pay_memo) - 1));
+
+    grit_rule(p, 6, SEND_RULE_Y, 788, false, PDA_RULE);
+
+    live_button(p, tr(TR_WALLET_CHECK), SEND_CHECK_X, SEND_BTN_Y,
+                SEND_CHECK_W, SEND_BTN_H, on_check, NULL, g_wui.group);
+    dim_button(p, tr(TR_WALLET_SCAN), SEND_SCAN_X, SEND_BTN_Y, SEND_SCAN_W);
+    why_line(p, tr(TR_WALLET_WHY_CAMERA), SEND_SCAN_X, SEND_WHY_Y, SEND_SCAN_W);
+
+    g_wui.send_status = line(p, "", SEND_FLD_X, SEND_ST_Y, SEND_FLD_W,
+                             &pda_font_mono_14, PDA_CARRIER_DOWN);
+    lv_label_set_long_mode(g_wui.send_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(g_wui.send_status, 36);
+
+    line(p, tr(TR_WALLET_SEND_HINT), SEND_FLD_X, SEND_HINT_Y, SEND_FLD_W,
+         &pda_font_mono_10, PDA_MSG_TIME);
+
+    if(s_send_err[0]) set_send_status(s_send_err, false);
+
+    lv_obj_add_event_cb(g_wui.send_memo, on_pay_memo, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+/* ---------- CONFIRM PAY ---------- */
+
+static void build_confirm(lv_obj_t * p)
+{
+    build_sub_title(p, TR_WALLET_CONFIRM, false);
+
+    char num[32], buf[64];
+
+    /* the payment went through: the numbers moved, here is where they are */
+    if(s_sent) {
+        lv_obj_t * t = line(p, tr(TR_WALLET_SENT), 0, SENT_TITLE_Y, BACK_W,
+                            &pda_font_mono_16, PDA_MSG_ACCENT);
+        center_line(t);
+
+        format_sats(s_confirm_sats + s_confirm_fee, num, sizeof(num));
+        snprintf(buf, sizeof(buf), "- %s %s", num, tr(TR_WALLET_SATS));
+        lv_obj_t * a = line(p, buf, 0, SENT_AMT_Y, BACK_W, &pda_font_mono_14, PDA_TEXT);
+        center_line(a);
+
+        lv_obj_t * n = line(p, tr(TR_WALLET_PAID_NOTE), 0, SENT_NOTE_Y, BACK_W,
+                            &pda_font_mono_10, PDA_MSG_TIME);
+        center_line(n);
+
+        format_sats(wallet_balance_sats(), num, sizeof(num));
+        snprintf(buf, sizeof(buf), "%s %s %s", tr(TR_WALLET_BALANCE),
+                 num, tr(TR_WALLET_SATS));
+        lv_obj_t * b = line(p, buf, 0, SENT_BAL_Y, BACK_W,
+                            &pda_font_mono_10, PDA_MSG_SYS);
+        center_line(b);
+
+        live_button(p, tr(TR_WALLET_BACK), (BACK_W - CONF_BTN_W) / 2, SENT_BTN_Y,
+                    CONF_BTN_W, CONF_BTN_H, on_sent_done, NULL, g_wui.group);
+        return;
+    }
+
+    line(p, tr(TR_WALLET_INVOICE), CONF_K_X, CONF_LBL_Y, 300,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    line_dot(p, s_invoice, CONF_K_X, CONF_INV_Y, SEND_FLD_W,
+             &pda_font_mono_10, PDA_MSG_TEXT);
+
+    line(p, tr(TR_WALLET_MEMO), CONF_K_X, CONF_MEM_Y, 300,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    line_dot(p, s_pay_memo[0] ? s_pay_memo : "-", CONF_K_X, CONF_MEMO_Y, SEND_FLD_W,
+             &pda_font_mono_14, PDA_MSG_TEXT);
+
+    grit_rule(p, 6, CONF_RULE_Y, 788, false, PDA_RULE);
+
+    line(p, tr(TR_WALLET_AMOUNT), CONF_K_X, CONF_AMT_Y, CONF_K_W,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    format_sats(s_confirm_sats, num, sizeof(num));
+    snprintf(buf, sizeof(buf), "%s %s", num, tr(TR_WALLET_SATS));
+    line(p, buf, CONF_V_X, CONF_AMT_Y - 5, CONF_V_W, &pda_font_mono_16, PDA_TEXT);
+
+    line(p, tr(TR_WALLET_FEE), CONF_K_X, CONF_FEE_Y, CONF_K_W,
+         &pda_font_mono_10, PDA_MSG_SYS);
+    format_sats(s_confirm_fee, num, sizeof(num));
+    snprintf(buf, sizeof(buf), "%s %s", num, tr(TR_WALLET_SATS));
+    line(p, buf, CONF_V_X, CONF_FEE_Y - 4, CONF_V_W, &pda_font_mono_14, PDA_MSG_TEXT);
+
+    grit_rule(p, 6, CONF_RULE2_Y, 788, false, PDA_RULE);
+
+    g_wui.conf_status = line(p, "", CONF_K_X, CONF_ST_Y, SEND_FLD_W,
+                             &pda_font_mono_14, PDA_CARRIER_DOWN);
+    lv_label_set_long_mode(g_wui.conf_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(g_wui.conf_status, 36);
+
+    live_button(p, tr(TR_WALLET_CANCEL), CONF_CANC_X, CONF_BTN_Y, CONF_BTN_W,
+                CONF_BTN_H, on_cancel, NULL, g_wui.group);
+    live_button(p, tr(TR_WALLET_PAY), CONF_PAY_X, CONF_BTN_Y, CONF_BTN_W,
+                CONF_BTN_H, on_pay, NULL, g_wui.group);
+
+    line_dot(p, tr(TR_WALLET_MOCK_BANNER), CONF_K_X, CONF_MOCK_Y, SEND_FLD_W,
+             &pda_font_mono_10, PDA_MSG_ACCENT);
+}
+
+/* ---------- HISTORY ---------- */
+
+static void hist_row(lv_obj_t * list, const wallet_tx_t * tx, int i)
+{
+    lv_obj_t * row = lv_obj_create(list);
+    lv_obj_set_pos(row, 0, i * HIST_ROW_H);
+    lv_obj_set_size(row, HIST_LIST_W - 12, HIST_ROW_H);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(row, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scroll_dir(row, LV_DIR_NONE);
+    lv_obj_set_scrollable(row, false);
+    lv_obj_set_clickable(row, false);
+
+    /* which way the money went, then the amount signed to match */
+    line(row, tr(tx->outgoing ? TR_WALLET_DIR_OUT : TR_WALLET_DIR_IN),
+         H_DIR_X, 5, H_DIR_W, &pda_font_mono_10,
+         tx->outgoing ? PDA_MSG_SYS : PDA_MSG_ACCENT);
+
+    char num[32], buf[48];
+    format_sats(tx->sats, num, sizeof(num));
+    snprintf(buf, sizeof(buf), "%s%s", tx->outgoing ? "-" : "+", num);
+    line_dot(row, buf, H_AMT_X, 5, H_AMT_W, &pda_font_mono_10, PDA_MSG_TEXT);
+
+    line_dot(row, tx->memo, H_MEMO_X, 5, H_MEMO_W, &pda_font_mono_10, PDA_MSG_TIME);
+
+    struct tm when;
+    localtime_r(&tx->when, &when);
+    char date[16];
+    snprintf(date, sizeof(date), "%02d-%02d", when.tm_mon + 1, when.tm_mday);
+    lv_obj_t * d = line(row, date, H_DATE_X, 5, H_DATE_W, &pda_font_mono_10, PDA_MSG_TIME);
+    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+
+    lv_obj_t * st = line(row, tr(tx->settled ? TR_WALLET_PAID : TR_WALLET_ST_EXPIRED),
+                         H_STAT_X, 5, H_STAT_W, &pda_font_mono_10,
+                         tx->settled ? PDA_MSG_ACCENT : PDA_CARRIER_DOWN);
+    lv_obj_set_style_text_align(st, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+
+    grit_rule(row, 0, HIST_ROW_H - 1, lv_pct(100), false, PDA_RULE);
+}
+
+static void build_history(lv_obj_t * p)
+{
+    build_sub_title(p, TR_WALLET_HISTORY, true);
+
+    lv_obj_t * list = lv_obj_create(p);
+    lv_obj_set_pos(list, HIST_LIST_X, HIST_LIST_Y);
+    lv_obj_set_size(list, HIST_LIST_W, HIST_LIST_H);
+    lv_obj_set_style_bg_color(list, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(list, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(list, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_radius(list, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(list, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(list, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(list, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollable(list, true);
+    lv_obj_set_style_bg_color(list, lv_color_hex(PDA_SCROLL), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(list, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(list, 0, LV_PART_SCROLLBAR);
+    g_wui.hist_list = list;
+    /* in the keypad group so the Pi's arrows scroll it once it has focus */
+    if(g_wui.group) lv_group_add_obj(g_wui.group, list);
+
+    wallet_tx_t rows[HIST_MAX];
+    int n = wallet_history(rows, HIST_MAX);
+    s_hist_top_valid = false;
+
+    if(n <= 0) {
+        lv_obj_t * e = line(list, tr(TR_WALLET_NO_HISTORY), 0, 8,
+                            HIST_LIST_W - 16, &pda_font_mono_14, PDA_MSG_TIME);
+        center_line(e);
+        return;
+    }
+
+    s_hist_top = rows[0];
+    s_hist_top_valid = true;
+    for(int i = 0; i < n; i++) hist_row(list, &rows[i], i);
+}
+
+/* A payment can land while this screen is up - an invoice made on REQUEST
+ * is settled by the same clock. Rebuild only when the newest row is not
+ * the one already on screen, so focus is not thrown away every tick. */
+static void refresh_history(void)
+{
+    if(!g_wui.content || !g_wui.hist_list) return;
+
+    wallet_tx_t top;
+    int n = wallet_history(&top, 1);
+
+    bool same = ((n > 0) == s_hist_top_valid);
+    if(same && n > 0) {
+        same = top.outgoing == s_hist_top.outgoing
+            && top.sats == s_hist_top.sats
+            && top.when == s_hist_top.when
+            && top.settled == s_hist_top.settled
+            && strcmp(top.memo, s_hist_top.memo) == 0;
+    }
+    if(same) return;
+    rebuild();
+}
+
 /* ---------- the panel ---------- */
 
 static void build_current(void)
 {
     if(!g_wui.root) return;
-    if(s_screen == SCREEN_REQUEST && wallet_state() != WALLET_READY)
-        s_screen = SCREEN_MAIN;
+    /* no backend, no screens below the balance - whichever one was up */
+    if(wallet_state() != WALLET_READY) s_screen = SCREEN_MAIN;
 
     lv_obj_t * c = lv_obj_create(g_wui.root);
     lv_obj_set_pos(c, 0, 0);
@@ -761,6 +1236,9 @@ static void build_current(void)
     g_wui.content = c;
 
     if(s_screen == SCREEN_REQUEST) build_request(c);
+    else if(s_screen == SCREEN_SEND) build_send(c);
+    else if(s_screen == SCREEN_CONFIRM) build_confirm(c);
+    else if(s_screen == SCREEN_HISTORY) build_history(c);
     else switch(wallet_state()) {
         case WALLET_READY: build_ready(c); break;
         case WALLET_ERROR: build_error(c); break;
@@ -798,6 +1276,12 @@ static void content_clear(void)
     g_wui.newrq = NULL;
     g_wui.hint = NULL;
     g_wui.inv_state = -1;
+    g_wui.send_inv = NULL;
+    g_wui.send_memo = NULL;
+    g_wui.send_status = NULL;
+    g_wui.conf_status = NULL;
+    g_wui.hist_list = NULL;
+    s_hist_top_valid = false;
 }
 
 lv_obj_t * wallet_ui_create(lv_obj_t * parent, lv_group_t * group)

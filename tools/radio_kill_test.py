@@ -202,7 +202,11 @@ try:
     note(p.poll() is None, f"the app survived the theme change (rc={p.poll()})")
     note(not gst_alive(),
          f"the player was stopped by the rebuild, no orphan ({gst_alive()})")
-    out = sh(f"grep -E 'scheme' {os.path.expanduser('~/.config/pda/prefs.conf')}")
+    # the same path prefs.c uses: $PDA_PREFS, $XDG_CONFIG_HOME, ~/.config
+    prefs = os.environ.get("PDA_PREFS") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "pda", "prefs.conf")
+    out = sh(f"grep -E 'scheme' {prefs}")
     note(bool(out.strip()), f"the setting was cycled ({out.strip()!r})")
     bad = sh(f"grep -E 'Segmentation|SIGSEGV|assert' {log}")
     note(not bad.strip(), "no crash in the log")

@@ -28,7 +28,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
 LOGDIR = "/tmp/opencode/uitest"
 SHOTS = "/tmp/opencode/uishot"
-PREFS = os.path.expanduser("~/.config/pda/prefs.conf")
+# where prefs.c looks: $PDA_PREFS, then $XDG_CONFIG_HOME, then ~/.config.
+# A desktop that sets XDG_CONFIG_HOME (a sandboxed one does) would put the
+# file somewhere this suite could not see it - and then every check that
+# reads the settings file would be reading a file nobody wrote.
+PREFS = os.environ.get("PDA_PREFS") or os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "pda", "prefs.conf")
 OX, OY = 560, 300           # the window's client origin on this desktop
 DY = 45                     # the panel starts under the tab row and the gap
 NAV_X = 40                  # the sections column
@@ -42,6 +48,8 @@ SUB_Y0 = 83                 # the first sub tab
 SUB_PITCH = 24
 
 FAIL = []
+
+APP_PID = None        # the app process the run in progress started
 
 
 def note(ok, msg):
@@ -66,6 +74,8 @@ def start(env_extra=None, log="app"):
     path = os.path.join(LOGDIR, f"{log}.log")
     f = open(path, "w")
     p = subprocess.Popen([APP], stdout=f, stderr=subprocess.STDOUT, env=env)
+    global APP_PID
+    APP_PID = p.pid
     return p, f, path
 
 
@@ -79,16 +89,134 @@ def stop(p, f):
     f.close()
 
 
+def find_pda_window(d):
+    """The PDA window, as an Xlib window object on the open display d.
+
+    The title alone is not enough: a run that has not gone away yet leaves
+    its own window on the screen with exactly the same title, and both the
+    raise and the coordinate reading below would then be pointed at it -
+    the screenshots come out perfect while the clicks land on a process
+    that is no longer listening. _NET_WM_PID is the pid of the process
+    start() launched, which is what this run's window is. """
+    from Xlib import X
+    root = d.screen().root
+    utf8 = d.intern_atom("UTF8_STRING")
+    wm_name = d.intern_atom("_NET_WM_NAME")
+    pid_atom = d.intern_atom("_NET_WM_PID")
+    clients = root.get_full_property(
+        d.intern_atom("_NET_CLIENT_LIST"), X.AnyPropertyType)
+    if not clients:
+        return None
+
+    fallback = None
+    for wid in clients.value:
+        w = d.create_resource_object("window", wid)
+        try:
+            prop = w.get_property(wm_name, utf8, 0, 1024)
+        except Exception:
+            continue
+        if not prop or not prop.value:
+            continue
+        title = prop.value if isinstance(prop.value, bytes) \
+            else str(prop.value).encode()
+        if b"PDA // Simulator" not in title:
+            continue
+        if APP_PID:
+            try:
+                pp = w.get_property(pid_atom, X.AnyPropertyType, 0, 1)
+            except Exception:
+                pp = None
+            if pp and pp.value and int(pp.value[0]) == APP_PID:
+                return w
+        if fallback is None:
+            fallback = w
+    return fallback
+
+
 def focus_window():
-    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
+    wid = None
+    try:
+        from Xlib import display
+        d = display.Display()
+        try:
+            w = find_pda_window(d)
+            if w is not None:
+                wid = "%#x" % w.id
+        finally:
+            d.close()
+    except Exception:
+        wid = None
+
+    if wid:
+        subprocess.run(["wmctrl", "-i", "-a", wid], capture_output=True)
+    else:
+        subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
     time.sleep(0.4)
+    window_origin()
+
+
+def window_origin():
+    """Where the PDA client area really is, in root coordinates.
+
+    OX/OY above were measured on the desktop this suite was written for,
+    where the window happened to land there. It does not always: the
+    window manager places it wherever there is a gap, and wmctrl -lG
+    reports yet another position (the frame's, off by the title bar). So
+    every click and every screenshot reads the client's real position out
+    of the X tree first - otherwise the clicks land on the wallpaper
+    while the screenshots still come out perfect, which is a very quiet
+    way for a suite to report on nothing. """
+    global OX, OY
+    from Xlib import display
+    d = None
+    try:
+        d = display.Display()
+        w = find_pda_window(d)
+        if w is None:
+            return
+        # walk up to the root: the client is reparented into the frame
+        root = d.screen().root
+        x = y = 0
+        cur = w
+        while cur.id != root.id:
+            g = cur.get_geometry()
+            x += g.x
+            y += g.y
+            cur = cur.query_tree().parent
+        OX, OY = x, y
+    except Exception:
+        pass
+    finally:
+        if d is not None:
+            try:
+                d.close()
+            except Exception:
+                pass
 
 
 def shot(name):
     focus_window()
-    subprocess.run(["gnome-screenshot", "-w", "-f", f"{SHOTS}_{name}.png"],
-                   capture_output=True)
-    return f"{SHOTS}_{name}.png"
+    path = f"{SHOTS}_{name}.png"
+    # Delete before capturing: gnome-screenshot fails now and then, and a
+    # file left over from the run before is a perfectly good picture of
+    # the wrong app - the hardest kind of test bug to see, because every
+    # check that reads it gets an answer, just not this run's. With the
+    # old file gone, a failed capture is loud instead of stale.
+    for attempt in range(3):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        r = subprocess.run(["gnome-screenshot", "-w", "-f", path],
+                           capture_output=True)
+        if os.path.exists(path):
+            return path
+        if attempt == 0 and r.stderr:
+            why = r.stderr.decode("utf-8", "replace").strip().splitlines()
+            print("    screenshot failed: " + (why[-1] if why else "no reason"),
+                  flush=True)
+        time.sleep(0.5)
+    raise RuntimeError(f"screenshot {path} could not be taken")
 
 
 def lit_pixels(path, y0=0, y1=480):
@@ -224,6 +352,40 @@ def read_mock_balance(path):
     except OSError:
         return None
     return int(m.group(1)) if m else None
+
+
+def read_mock_history(path):
+    """the history rows the preview backend kept, newest first"""
+    try:
+        with open(path) as fh:
+            return [l.rstrip("\n") for l in fh if l.startswith("history = ")]
+    except OSError:
+        return []
+
+
+def hist_status_pixels(path):
+    """bright pixels where only a history row can put text.
+
+    The first row's status is right-aligned at the end of client x 646..768
+    and its line runs from client y 86 to 108 (the panel starts 34 px under
+    the tab row; the screenshot adds the window decoration on top). The
+    empty state is one line centred on x=400, the list border is at x=784
+    and the scrollbar past x=775 - none of them can reach in here. """
+    try:
+        from PIL import Image
+    except ImportError:
+        return -1
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    off = h - 480                       # the decoration above the 800x480 client
+    px = im.load()
+    n = 0
+    for y in range(86 + off, min(108 + off, h)):
+        for x in range(700, min(776, w)):
+            r, g, b = px[x, y]
+            if r + g + b > 300:
+                n += 1
+    return n
 
 
 def qr_bright(path, x0=32, x1=328, y0=150, y1=442):
@@ -977,6 +1139,161 @@ def test_wallet():
         time.sleep(0.8)
         note(qr_bright(shot("wallet_back")) < 500, "BACK leaves the REQUEST screen")
         note(app_alive(p, logpath), "the app is alive through the whole wallet flow")
+    finally:
+        stop(p, f)
+
+    # ---- SEND and HISTORY: an invoice in, a payment out, kept on disk ----
+    # panel coordinates plus the 34 px the panel sits under the tab row
+    SEND_BTN = (314, 390)
+    HIST_BTN = (486, 390)
+    INV_FIELD = (400, 124)
+    SEND_MEMO = (400, 194)
+    CHECK_BTN = (104, 248)
+    CANCEL_BTN = (290, 343)
+    PAY_BTN = (510, 343)
+    DONE_BTN = (400, 343)
+    sent_invoice = "lnbc5000n1p" + "q" * 160     # 500 sats, bolt11 shaped
+
+    if os.path.exists(mockfile):
+        os.unlink(mockfile)
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile,
+                           "PDA_INVOICE": sent_invoice},
+                          "wallet_send")
+    try:
+        time.sleep(2.6)
+
+        # HISTORY while there is nothing in it yet
+        click_once(*HIST_BTN)
+        time.sleep(0.8)
+        empty_path = shot("wallet_hist_empty")
+        note(lit_pixels(empty_path, y0=60, y1=470) > 200,
+             "the HISTORY screen comes up")
+        empty = hist_status_pixels(empty_path)
+        note(empty <= 5, f"nothing is drawn while the history is empty ({empty} px)")
+        click_once(*BACK_BTN)
+        time.sleep(0.6)
+
+        # SEND: the invoice the simulator was handed, with a memo on it
+        click_once(*SEND_BTN)
+        time.sleep(0.8)
+        note(lit_pixels(shot("wallet_send"), y0=180) > 100, "the SEND screen comes up")
+
+        click_once(*SEND_MEMO)
+        time.sleep(0.4)
+        type_text("lunch")
+        time.sleep(0.8)
+
+        click_once(*CHECK_BTN)
+        time.sleep(1.0)
+        note(lit_pixels(shot("wallet_confirm"), y0=180) > 100,
+             "CHECK reads the field and brings up CONFIRM PAY")
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("[wallet] check: 500 sats" in log,
+             "the invoice in the field is worth 500 sats")
+
+        # PAY: the numbers move, and the screen says so
+        click_once(*PAY_BTN)
+        time.sleep(1.0)
+        note(lit_pixels(shot("wallet_sent"), y0=180) > 100,
+             "the payment comes back with a result screen")
+        balance = read_mock_balance(mockfile)
+        note(balance == DEFAULT_BALANCE - 501,
+             f"the amount and its fee leave the balance ({balance})")
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("[wallet] pay: 500 sats + 1 fee, balance 1234066" in log,
+             "the backend logged exactly what moved")
+
+        click_once(*DONE_BTN)
+        time.sleep(0.6)
+
+        # the row it left behind
+        click_once(*HIST_BTN)
+        time.sleep(0.8)
+        path = shot("wallet_hist")
+        filled = hist_status_pixels(path)
+        note(filled > 10, f"a row is drawn on the HISTORY screen ({filled} px)")
+        note(lit_pixels(path, y0=60, y1=470) > 200, "the HISTORY screen renders")
+        rows = read_mock_history(mockfile)
+        note(len(rows) == 1 and re.search(r"\|out\|500\|paid\|lunch$", rows[0]),
+             f"the payment is on disk as one history row ({rows})")
+
+        click_once(*BACK_BTN)
+        time.sleep(0.5)
+
+        # a paid invoice is not offered a second time
+        click_once(*SEND_BTN)
+        time.sleep(0.8)
+        click_once(*CHECK_BTN)
+        time.sleep(0.8)
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("check refused: there is no invoice in the field" in log,
+             "after it has been paid the field is empty and says so")
+        note(app_alive(p, logpath), "the app is alive through the whole payment")
+    finally:
+        stop(p, f)
+
+    # the balance and the history were written: they come back
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile}, "wallet_reload")
+    try:
+        time.sleep(2.6)
+        click_once(*HIST_BTN)
+        time.sleep(0.8)
+        filled = hist_status_pixels(shot("wallet_hist_again"))
+        note(filled > 10, f"the history is on screen after a restart ({filled} px)")
+        rows = read_mock_history(mockfile)
+        note(len(rows) == 1, f"the history row survived the restart ({len(rows)})")
+        note(read_mock_balance(mockfile) == DEFAULT_BALANCE - 501,
+             "the balance survived the restart too")
+        note(app_alive(p, logpath), "the app is alive on the restart")
+    finally:
+        stop(p, f)
+
+    # an invoice typed into the field, with no PDA_INVOICE to help
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile}, "wallet_typed")
+    try:
+        time.sleep(2.6)
+        click_once(*SEND_BTN)
+        time.sleep(0.8)
+        click_once(*INV_FIELD)
+        time.sleep(0.4)
+        type_text("lnbc100n1pqqqqqqqq")       # 10 sats, bech32 data only
+        time.sleep(0.8)
+        click_once(*CHECK_BTN)
+        time.sleep(1.0)
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("[wallet] check: 10 sats" in log,
+             "an invoice typed into the field is read back (10 sats)")
+        note(lit_pixels(shot("wallet_typed_confirm"), y0=180) > 100,
+             "and it brings up CONFIRM PAY")
+        note(app_alive(p, logpath), "the app is alive after typing an invoice")
+    finally:
+        stop(p, f)
+
+    # rubbish in the field: refused with the reason, and nothing happens
+    p, f, logpath = start({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+                           "PDA_WALLET_MOCK": mockfile,
+                           "PDA_INVOICE": "not an invoice at all"},
+                          "wallet_rubbish")
+    try:
+        time.sleep(2.6)
+        click_once(*SEND_BTN)
+        time.sleep(0.8)
+        click_once(*CHECK_BTN)
+        time.sleep(0.8)
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("check refused: that is not a bolt11 invoice" in log,
+             "a rubbish invoice is refused with a reason")
+        note("[wallet] check: " not in log, "and nothing is confirmed from it")
+        note("[wallet] pay" not in log, "and nothing is paid for it")
+        note(app_alive(p, logpath), "the app is alive after a refused invoice")
     finally:
         stop(p, f)
 

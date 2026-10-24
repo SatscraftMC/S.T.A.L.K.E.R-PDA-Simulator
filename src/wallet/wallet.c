@@ -12,13 +12,17 @@ bool wallet_mock_make_invoice(int64_t sats, const char * memo,
 bool wallet_mock_invoice(wallet_invoice_t * out);
 void wallet_mock_poll(void);
 int wallet_mock_history(wallet_tx_t * out, int max);
+bool wallet_mock_check(const char * bolt11, int64_t * sats_out,
+                       char * err, size_t err_n);
+int64_t wallet_mock_fee(int64_t sats);
+bool wallet_mock_pay(const char * bolt11, const char * memo,
+                     int64_t * sats_out, char * err, size_t err_n);
 
 static bool s_done = false;
 static wallet_state_t s_state = WALLET_UNSET;
 static wallet_backend_t s_backend = WALLET_BACKEND_NONE;
 static char s_name[48] = "none";
 static char s_err[192];
-static int64_t s_balance = 0;
 
 void wallet_init(void)
 {
@@ -37,7 +41,7 @@ void wallet_init(void)
     if(!strcmp(b, "mock")) {
         s_backend = WALLET_BACKEND_MOCK;
         s_state = WALLET_READY;
-        s_balance = wallet_mock_open();
+        wallet_mock_open();      /* loads the balance and the history */
         return;
     }
 
@@ -72,10 +76,15 @@ bool wallet_is_mock(void)
     return s_backend == WALLET_BACKEND_MOCK;
 }
 
+/* The balance is the backend's to keep: a payment or a settle moves it
+ * between two reads of this, and a copy taken at startup would put a stale
+ * number on the balance screen, the PAID panel and the result of a payment
+ * that has already happened. */
 int64_t wallet_balance_sats(void)
 {
     if(s_state != WALLET_READY) return 0;
-    return s_balance;
+    if(s_backend == WALLET_BACKEND_MOCK) return wallet_mock_balance();
+    return 0;
 }
 
 /* Make an invoice. The mock can; anything that has not landed yet fails
@@ -112,20 +121,57 @@ void wallet_poll(void)
     if(s_backend == WALLET_BACKEND_MOCK) wallet_mock_poll();
 }
 
-/* Paying arrives with the SEND screen (phase 3); until then it fails with
- * the reason instead of pretending to work. */
-bool wallet_pay_invoice(const char * bolt11, int64_t * sats_out,
-                        char * err, size_t err_n)
+/* the reason a call cannot be made, or "" when it can be: the wallet is
+ * not set up, or the backend in front of us is not one this build has */
+static bool send_gate(char * err, size_t err_n)
 {
-    (void)bolt11;
-    if(sats_out) *sats_out = 0;
-    if(err && err_n) {
-        if(s_state != WALLET_READY)
-            snprintf(err, err_n, "%s", "the wallet is not set up");
-        else
-            snprintf(err, err_n, "%s", "paying arrives with the SEND screen");
+    if(s_state != WALLET_READY) {
+        if(err && err_n) snprintf(err, err_n, "%s", "the wallet is not set up");
+        return false;
     }
-    return false;
+    if(s_backend != WALLET_BACKEND_MOCK) {
+        if(err && err_n) snprintf(err, err_n, "%s",
+                                  "this backend cannot move money yet");
+        return false;
+    }
+    return true;
+}
+
+bool wallet_check_invoice(const char * bolt11, int64_t * sats_out,
+                          char * err, size_t err_n)
+{
+    if(sats_out) *sats_out = 0;
+    if(!send_gate(err, err_n)) return false;
+
+    bool ok = wallet_mock_check(bolt11, sats_out, err, err_n);
+    /* read back by tools/ui_test.py - and never with "invoice:" in it, or
+       it would be mistaken for the bolt11 the screen was handed */
+    if(ok)
+        fprintf(stderr, "[wallet] check: %lld sats\n", (long long)*sats_out);
+    else
+        fprintf(stderr, "[wallet] check refused: %s\n",
+                (err && *err) ? err : "no reason given");
+    return ok;
+}
+
+int64_t wallet_fee_sats(int64_t sats)
+{
+    if(s_state != WALLET_READY || s_backend != WALLET_BACKEND_MOCK) return 0;
+    return wallet_mock_fee(sats);
+}
+
+bool wallet_pay_invoice(const char * bolt11, const char * memo,
+                        int64_t * sats_out, char * err, size_t err_n)
+{
+    if(sats_out) *sats_out = 0;
+    if(!send_gate(err, err_n)) return false;
+
+    if(!wallet_mock_pay(bolt11, memo, sats_out, err, err_n)) {
+        fprintf(stderr, "[wallet] pay refused: %s\n",
+                (err && *err) ? err : "no reason given");
+        return false;
+    }
+    return true;
 }
 
 int wallet_history(wallet_tx_t * out, int max)

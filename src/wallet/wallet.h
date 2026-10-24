@@ -91,8 +91,26 @@ bool wallet_invoice(wallet_invoice_t * out);
    UI calls this on a timer and then reads wallet_invoice() again. */
 void wallet_poll(void);
 
-bool wallet_pay_invoice(const char * bolt11, int64_t * sats_out,
-                        char * err, size_t err_n);
+/* What an invoice is asking for, without paying anything: the confirm
+ * screen reads the amount off this before it offers a PAY button. False
+ * with err set when the string is not a bolt11 invoice, when it carries no
+ * amount (an amount-less invoice cannot be paid by this seam), or when it
+ * asks for more than any wallet holds. The string is cleaned up first: a
+ * paste may be padded with blanks or wrapped over a line. */
+bool wallet_check_invoice(const char * bolt11, int64_t * sats_out,
+                          char * err, size_t err_n);
+
+/* What the backend charges on top of sats to move it - shown next to the
+ * amount on the confirm screen, before anything is paid. */
+int64_t wallet_fee_sats(int64_t sats);
+
+/* Pay it: the amount (plus the fee) leaves the balance and a row lands in
+ * the history. memo says what it was for (the merchant card supplies it
+ * later; nothing here needs one). sats_out gets the amount paid, not the
+ * fee. */
+bool wallet_pay_invoice(const char * bolt11, const char * memo,
+                        int64_t * sats_out, char * err, size_t err_n);
+
 int wallet_history(wallet_tx_t * out, int max);   /* newest first */
 
 #endif
