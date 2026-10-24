@@ -144,6 +144,8 @@ typedef struct {
     lv_obj_t * poi_card;           /* the card of a tapped merchant */
     lv_obj_t * poi_card_name;
     lv_obj_t * poi_card_info;
+    lv_obj_t * poi_card_btn;       /* [REQUEST]: ask the Wallet for this one */
+    int poi_card_idx;              /* which merchant the card is showing */
     /* the route the user planned: right click puts a waypoint down, right
        click on it takes it away again */
     double wp_lon[MAX_WAYPOINTS];
@@ -1021,8 +1023,16 @@ typedef struct {
 
 static poi_screen_t s_poi_screen[POI_VISIBLE];
 
-/* the bag of coins in the middle of the circle */
-static const char * const g_bag_bitmap[9] = {
+/* the bag of coins in the middle of the circle: 9 rows of 7. The loops
+   below stop at the end of these strings - a row is shorter than the grid
+   it is drawn into, and reading to the width of that grid took one byte
+   past the row's NUL every time an icon was drawn (global-buffer-overflow,
+   AddressSanitizer; it only ever bit once ui_test started drawing the
+   Traders layer). */
+#define BAG_ROWS    9
+#define BAG_W       7
+
+static const char * const g_bag_bitmap[BAG_ROWS] = {
     "..###..",
     "..###..",
     ".#####.",
@@ -1058,9 +1068,9 @@ static void draw_trader_icon(shell_t * sh, int cx, int cy, uint16_t col)
             view_px(sh, cx + i - POI_ICON / 2, cy + j - POI_ICON / 2, col);
         }
     }
-    for(int j = 0; j < 9; j++) {
+    for(int j = 0; j < BAG_ROWS; j++) {
         const char * row = g_bag_bitmap[j];
-        for(int i = 0; i < 9; i++) {
+        for(int i = 0; i < BAG_W; i++) {
             if(row[i] != '#') continue;
             view_px(sh, cx + i - 4, cy + j - 4, col);
         }
@@ -1689,6 +1699,35 @@ static int poi_under(int mx, int my)
     return best;
 }
 
+/* the card of one merchant: what it is called, what it takes, and the
+   button that takes the Wallet to a request for it */
+static void show_poi_card(shell_t * sh, int i)
+{
+    const poi_place_t * place = poi_get(i);
+    if(!place || !sh->poi_card) return;
+
+    char flags[96];
+    poi_flags_text(place, flags, sizeof(flags));
+
+    char line[160];
+    snprintf(line, sizeof(line), "%s%s%s", place->name[0] ? place->name : "(no name)",
+             place->address[0] ? " - " : "", place->address);
+    lv_label_set_text(sh->poi_card_name, line);
+    snprintf(line, sizeof(line), "%s%s%s", flags,
+             place->category[0] ? " - " : "", place->category);
+    lv_label_set_text(sh->poi_card_info, line);
+
+    /* A merchant that needs their own app will not take a plain BOLT11
+       (BTC_MAP_INTEGRATION.md 7.1), so it gets no [REQUEST] - the flags
+       line right above it already says "needs an app". */
+    if(sh->poi_card_btn)
+        lv_obj_set_hidden(sh->poi_card_btn, (place->flags & POI_F_COMPANION) != 0);
+
+    sh->poi_card_idx = i;
+    lv_obj_set_hidden(sh->poi_card, false);
+    lv_obj_move_foreground(sh->poi_card);
+}
+
 /* a tap on the map opens the card of the merchant that is there */
 static void on_map_click(lv_event_t * e)
 {
@@ -1706,22 +1745,27 @@ static void on_map_click(lv_event_t * e)
     int i = poi_under(mx, my);
     if(i < 0) {
         lv_obj_set_hidden(sh->poi_card, true);
+        sh->poi_card_idx = -1;
         return;
     }
 
-    const poi_place_t * place = poi_get(i);
-    char flags[96];
-    poi_flags_text(place, flags, sizeof(flags));
+    show_poi_card(sh, i);
+}
 
-    char line[160];
-    snprintf(line, sizeof(line), "%s%s%s", place->name[0] ? place->name : "(no name)",
-             place->address[0] ? " - " : "", place->address);
-    lv_label_set_text(sh->poi_card_name, line);
-    snprintf(line, sizeof(line), "%s%s%s", flags,
-             place->category[0] ? " - " : "", place->category);
-    lv_label_set_text(sh->poi_card_info, line);
-    lv_obj_set_hidden(sh->poi_card, false);
-    lv_obj_move_foreground(sh->poi_card);
+/* the card's [REQUEST]: the Wallet tab, on the screen that makes the
+   invoice, with this merchant's name as the memo - the PDA is the invoice
+   side, the merchant's terminal scans what it makes */
+static void on_poi_request(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    shell_t * sh = &g_sh;
+    const poi_place_t * place = poi_get(sh->poi_card_idx);
+    if(!place) return;
+
+    lv_obj_set_hidden(sh->poi_card, true);   /* it comes back on the map */
+    sh->poi_card_idx = -1;
+    wallet_open_with_memo(place->name[0] ? place->name
+                          : (place->category[0] ? place->category : ""));
 }
 
 static void on_map_pressing(lv_event_t * e)
@@ -1905,10 +1949,13 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_style_text_font(sh->coord_me_lbl, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->coord_me_lbl, lv_color_hex(PDA_MSG_TEXT), LV_PART_MAIN);
 
-    /* the card of a merchant: it opens when one is tapped */
+    /* the card of a merchant: it opens when one is tapped. It grew 6px
+       taller than it was for the button below - two lines of flags have to
+       fit inside it without the second one being clipped, and the bottom
+       edge stays where it was so the credit line keeps its space. */
     lv_obj_t * card = lv_obj_create(overlay);
-    lv_obj_set_pos(card, 8, MAP_VIEW_H - 62);
-    lv_obj_set_size(card, 420, 46);
+    lv_obj_set_pos(card, 8, MAP_VIEW_H - 68);
+    lv_obj_set_size(card, 420, 52);
     lv_obj_set_style_bg_color(card, lv_color_hex(PDA_CHAT_BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(card, 1, LV_PART_MAIN);
@@ -1919,10 +1966,18 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     lv_obj_set_hidden(card, true);
     sh->poi_card = card;
 
+    /* Both labels are cut short with dots rather than allowed to grow:
+       with a width alone LVGL wraps them into more lines than the card
+       holds and the last one is clipped by the card's own edge (the same
+       one that bit the Wallet's bolt11 label). The height is the tallest
+       line any glyph of this size needs - the fallback font's, since a
+       merchant's name can hold an accented letter. */
+    int lh = lv_font_get_line_height(&pda_font_fallback_10);
+
     sh->poi_card_name = lv_label_create(card);
     lv_label_set_text(sh->poi_card_name, "");
     lv_obj_set_pos(sh->poi_card_name, 2, 2);
-    lv_obj_set_width(sh->poi_card_name, 404);
+    lv_obj_set_size(sh->poi_card_name, 300, lh);  /* the button has the right end */
     lv_label_set_long_mode(sh->poi_card_name, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(sh->poi_card_name, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->poi_card_name, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
@@ -1930,10 +1985,39 @@ static void build_map(shell_t * sh, lv_obj_t * parent)
     sh->poi_card_info = lv_label_create(card);
     lv_label_set_text(sh->poi_card_info, "");
     lv_obj_set_pos(sh->poi_card_info, 2, 15);
-    lv_obj_set_width(sh->poi_card_info, 404);
+    lv_obj_set_size(sh->poi_card_info, 300, 2 * lh);   /* what it takes, in words */
     lv_label_set_long_mode(sh->poi_card_info, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(sh->poi_card_info, &pda_font_mono_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(sh->poi_card_info, lv_color_hex(PDA_MSG_SYS), LV_PART_MAIN);
+
+    /* [REQUEST]: straight to the Wallet with this merchant's name in the
+       memo. A map overlay control like the zoom buttons next to it - it is
+       not in the keypad group, and it never pretends to pay anything: it
+       only opens the screen that asks for a payment. */
+    lv_obj_t * req = lv_button_create(card);
+    lv_obj_set_pos(req, 308, 8);
+    lv_obj_set_size(req, 98, 26);
+    lv_obj_set_style_bg_color(req, lv_color_hex(PDA_SUB_FILL), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(req, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(req, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(req, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_radius(req, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(req, 0, LV_PART_MAIN);
+    lv_no_transition(req);
+
+    lv_obj_t * req_lbl = lv_label_create(req);
+    lv_label_set_text(req_lbl, tr(TR_WALLET_REQUEST));
+    lv_obj_set_pos(req_lbl, 0, (26 - 16) / 2);
+    lv_obj_set_width(req_lbl, 98);
+    lv_label_set_long_mode(req_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(req_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(req_lbl, &pda_font_mono_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(req_lbl, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(req_lbl, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(req, on_poi_request, LV_EVENT_CLICKED, NULL);
+    sh->poi_card_btn = req;
+    sh->poi_card_idx = -1;
+    lv_obj_set_hidden(req, true);   /* no merchant on the card yet */
 
     lv_obj_add_event_cb(map, on_map_press, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(map, on_map_pressing, LV_EVENT_PRESSING, NULL);
@@ -2094,6 +2178,20 @@ void pda_shell_retheme(void)
 
     other_ui_set_state(page, sub);
     show_view(sh);
+}
+
+/* the Wallet tab, as it stands right now. The merchant card gets here
+   through wallet_open_with_memo(); tab switching is the shell's business,
+   which is why that call ends here. */
+void pda_shell_show_wallet(void)
+{
+    shell_t * sh = &g_sh;
+    /* panels[i] holds the tab after it (the loop in pda_shell_create), so
+       the Wallet panel is panels[4] and the tab that shows it is 5 - the
+       one after Camera. It is the last thing pda_shell_create builds, so
+       it is also what says the shell is ready to be switched. */
+    if(!sh->panels[4]) return;
+    set_tab(sh, 5);
 }
 
 /* how often the GPS is looked at */

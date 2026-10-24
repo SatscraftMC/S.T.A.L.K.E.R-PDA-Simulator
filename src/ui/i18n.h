@@ -76,6 +76,9 @@ typedef enum {
     TR_WALLET_SEND_HINT,
     TR_WALLET_DIR_IN,
     TR_WALLET_DIR_OUT,
+    TR_WALLET_MAKE_FAILED,
+    TR_WALLET_CANT_PAY,
+    TR_WALLET_PAY_FAILED,
     TR_COUNT
 } tr_id_t;
 

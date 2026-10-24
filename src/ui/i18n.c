@@ -75,6 +75,9 @@ static const char * const s_en[TR_COUNT] = {
     [TR_WALLET_SEND_HINT]    = "nothing goes out until you confirm it",
     [TR_WALLET_DIR_IN]       = "IN",
     [TR_WALLET_DIR_OUT]      = "OUT",
+    [TR_WALLET_MAKE_FAILED]  = "could not make an invoice",
+    [TR_WALLET_CANT_PAY]     = "that invoice cannot be paid",
+    [TR_WALLET_PAY_FAILED]   = "the payment did not go through",
 };
 
 static const char * const s_pl[TR_COUNT] = {
@@ -149,6 +152,9 @@ static const char * const s_pl[TR_COUNT] = {
     [TR_WALLET_SEND_HINT]    = "nic nie wychodzi bez potwierdzenia",
     [TR_WALLET_DIR_IN]       = "WP\u0141",
     [TR_WALLET_DIR_OUT]      = "WYP\u0141",
+    [TR_WALLET_MAKE_FAILED]  = "nie uda\u0142o si\u0119 wystawi\u0107 faktury",
+    [TR_WALLET_CANT_PAY]     = "tej faktury nie da si\u0119 zap\u0142aci\u0107",
+    [TR_WALLET_PAY_FAILED]   = "p\u0142atno\u015b\u0107 nie dosz\u0142a do skutku",
 };
 
 static int s_lang = TR_LANG_EN;

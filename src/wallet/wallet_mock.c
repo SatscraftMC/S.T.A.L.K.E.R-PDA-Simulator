@@ -312,6 +312,11 @@ bool wallet_mock_make_invoice(int64_t sats, const char * memo,
     /* the UI test reads this back out of the log and checks it against the
        QR code the screen drew */
     fprintf(stderr, "[wallet] invoice: %s\n", out->bolt11);
+    /* and this to know the memo reached the invoice - the merchant card
+       hands one over, and a row without a memo is not worth showing.
+       Never with "invoice:" in it either, for the same reason. */
+    if(out->memo[0])
+        fprintf(stderr, "[wallet] memo: %s\n", out->memo);
     return true;
 }
 

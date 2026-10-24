@@ -5,7 +5,7 @@
 
 /* which build this is - the app says it when it starts, so a stale process
    is easy to spot */
-#define PDA_VERSION   "v0.5.1-alpha"
+#define PDA_VERSION   "v0.5.2-alpha"
 
 lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group);
 
@@ -20,6 +20,12 @@ void pda_shell_right_click(int x, int y);
 /* The theme or the language changed: the panels are built with the colours
    and the words, so they are built again. */
 void pda_shell_retheme(void);
+
+/* The Wallet tab, as it stands right now. Tab switching lives in the shell,
+   so a screen that is not a tab (the merchant card's [REQUEST] button,
+   through wallet_open_with_memo) asks for it here. Does nothing when the
+   shell is not built yet. */
+void pda_shell_show_wallet(void);
 
 /* how often the GPS is looked at, in milliseconds */
 void pda_shell_set_gps_poll(int ms);

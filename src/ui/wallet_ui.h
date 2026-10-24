@@ -17,4 +17,13 @@ lv_obj_t * wallet_ui_create(lv_obj_t * parent, lv_group_t * group);
    has to let go of its animations and objects first */
 void wallet_ui_destroy(void);
 
+/* Take the device to the Wallet tab and open REQUEST with memo already
+   written in it - the merchant card's [REQUEST] button does this, and so
+   will anything else that has a name to ask for a payment with (the
+   Contacts list, a real backend's "pay this" entry point). The tab comes
+   with it: this is the one call a screen outside the Wallet makes.
+   With no backend the tab still opens, on the honest "not set up" screen,
+   and the memo waits there for one. */
+void wallet_open_with_memo(const char * memo);
+
 #endif

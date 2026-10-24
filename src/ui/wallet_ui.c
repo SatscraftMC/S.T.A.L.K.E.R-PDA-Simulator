@@ -1,4 +1,5 @@
 #include "ui/wallet_ui.h"
+#include "ui/pda_shell.h"
 #include "wallet/wallet.h"
 #include "wallet/qr.h"
 #include "ui/palette.h"
@@ -551,7 +552,7 @@ static void make_invoice_now(void)
     char bolt11[640];
     if(!wallet_make_invoice(s_amount, s_memo, bolt11, sizeof(bolt11),
                             s_last_err, sizeof(s_last_err)) && !s_last_err[0])
-        snprintf(s_last_err, sizeof(s_last_err), "%s", "could not make an invoice");
+        snprintf(s_last_err, sizeof(s_last_err), "%s", tr(TR_WALLET_MAKE_FAILED));
 }
 
 /* draw the invoice into the canvas (or say why there is nothing to draw) */
@@ -826,8 +827,7 @@ static void on_check(lv_event_t * e)
     int64_t sats = 0;
     if(!wallet_check_invoice(s_invoice, &sats, s_send_err, sizeof(s_send_err))) {
         if(!s_send_err[0])
-            snprintf(s_send_err, sizeof(s_send_err), "%s",
-                     "that invoice cannot be paid");
+            snprintf(s_send_err, sizeof(s_send_err), "%s", tr(TR_WALLET_CANT_PAY));
         set_send_status(s_send_err, false);
         return;
     }
@@ -856,8 +856,7 @@ static void on_pay(lv_event_t * e)
     if(!wallet_pay_invoice(s_invoice, s_pay_memo, &paid,
                            s_send_err, sizeof(s_send_err))) {
         if(!s_send_err[0])
-            snprintf(s_send_err, sizeof(s_send_err), "%s",
-                     "the payment did not go through");
+            snprintf(s_send_err, sizeof(s_send_err), "%s", tr(TR_WALLET_PAY_FAILED));
         if(g_wui.conf_status) {
             lv_label_set_text(g_wui.conf_status, s_send_err);
             lv_obj_set_style_text_color(g_wui.conf_status,
@@ -1336,4 +1335,28 @@ void wallet_ui_destroy(void)
     }
     if(g_wui.qr_px) free(g_wui.qr_px);
     memset(&g_wui, 0, sizeof(g_wui));
+}
+
+/* ---------- the way in from outside ---------- */
+
+/* The merchant card's [REQUEST] button, and later anything else that has a
+ * name to ask for a payment with: this is the Wallet tab, on the screen
+ * that makes the invoice, with what it is for already written in - and an
+ * invoice for it, made right here, so the merchant can scan straight away.
+ *
+ * With no backend build_current() puts the honest "not set up" screen up
+ * instead (the memo is kept, so it is still there when one arrives), and
+ * with a backend that cannot answer yet nothing is faked: the screens are
+ * built from wallet.h and nothing here assumes the mock. */
+void wallet_open_with_memo(const char * memo)
+{
+    snprintf(s_memo, sizeof(s_memo), "%s", memo ? memo : "");
+    if(wallet_state() == WALLET_READY) make_invoice_now();
+    s_screen = SCREEN_REQUEST;
+
+    if(g_wui.root) {
+        content_clear();
+        build_current();
+    }
+    pda_shell_show_wallet();     /* the tab it lives on is the shell's */
 }

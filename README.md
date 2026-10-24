@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.5.1-alpha**
+**v0.5.2-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -16,6 +16,10 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 |-------------|----------|------|
 | ![connections](docs/screenshots/other-connections.png) | ![settings](docs/screenshots/other-settings.png) | ![user](docs/screenshots/other-user.png) |
 
+| Merchant card | Wallet request |
+|---------------|----------------|
+| ![merchant card](docs/screenshots/merchant-card.png) | ![wallet request](docs/screenshots/wallet-request.png) |
+
 ## Features
 
 - **Offline map** with real Esri satellite imagery of Madeira, zoom 64–10923 (whole archipelago → ~1 m/px)
@@ -23,7 +27,7 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **Four map layers** (Areas, Traders, Stashes, Waypoints) toggled by the strip under the tab bar; blue dot = GPS position
 - **Waypoints & route**: right-click to place/remove; line drawn from position → waypoint → next; auto-removes at 5 m; remembered across restarts; Waypoints layer toggles it; CLEAR button in zoom column
 - **Mouse & player coordinates** in top-right corner
-- **Traders layer = real bitcoin merchants** from [BTC Map](https://btcmap.org) (OSM `currency:XBT=yes`) — 166 places on Madeira; bag-of-coins icon; tapping opens card (name, address, lightning/contactless/on-chain/ATM, last checked year)
+- **Traders layer = real bitcoin merchants** from [BTC Map](https://btcmap.org) (OSM `currency:XBT=yes`) — 166 places on Madeira; bag-of-coins icon; tapping opens a card (name, address, lightning/contactless/on-chain/ATM, last checked year) with a **[REQUEST]** button that opens the Wallet for that merchant
 - **Pack-based map system** — regions are self-contained folders, no code change to add new areas
 - **Messages tab: one room, three carriers** (BIT local mesh, FIPS mesh, NET internet); messages go out on all active carriers; incoming tagged by carrier
 - **Carrier picker** in Messages strip — per-carrier send toggle (off still receives); remembered in settings
@@ -47,6 +51,23 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
   icons, like the reference image. Scans a directory for MP3 files and plays
   them via `gst-launch-1.0`. The directory is configurable (`PDA_RADIO_DIR`,
   saved in settings). Auto-advances to the next track when one finishes.
+- **Wallet tab, honest until a backend lands**: no backend is a *not set up*
+  screen, an unknown one is named on an error screen, and the preview backend
+  (`PDA_WALLET_BACKEND=mock`) wears a `MOCK - NO REAL MONEY` banner everywhere a
+  balance shows. The real backend (LDK Node / NIP-47 / Cashu, its own spec)
+  plugs into the same `wallet.h` seam without touching the screens.
+- **REQUEST → QR → PAID**: amount keypad + memo, the invoice as a QR code
+  (BOLT11, ECC level L, up to version 17), expiry countdown, and the settle
+  that flips the screen to PAID and moves the balance. SEND takes an invoice
+  from a paste or from `PDA_INVOICE` and shows amount and fee before [PAY] will
+  move anything; HISTORY is the rows the backend kept, in the state file, and
+  it comes back after a restart. `[SCAN]` stays dimmed with its reason — there
+  is no camera in this build, and nothing pretends to work.
+- **Merchant card [REQUEST]**: tapping a trader on the map opens its card, and
+  the button on it goes straight to a request with the merchant's name as the
+  memo — the PDA is the invoice side, the merchant's terminal scans what it
+  shows. A merchant that needs its own app gets no button (it will not take a
+  plain BOLT11).
 
 ## Carriers
 
@@ -126,7 +147,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Status
 
-Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Other tab (all settings work) functional. Contacts, Camera and Wallet are visible stub tabs. TODO: wallet/QR, camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated (31 keys EN/PL; stub panels still hardcoded English).
+Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Contacts and Camera are visible stub tabs. TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 74 keys EN + PL in the `TR_` table, while the two stub panels, the map's flag words and the wallet backend's own messages are still English.
 
 ## License
 

@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -1294,6 +1295,122 @@ def test_wallet():
         note("[wallet] check: " not in log, "and nothing is confirmed from it")
         note("[wallet] pay" not in log, "and nothing is paid for it")
         note(app_alive(p, logpath), "the app is alive after a refused invoice")
+    finally:
+        stop(p, f)
+
+    # ---- the merchant card: a tap on the map, [REQUEST], the Wallet ----
+    # The pack is ours (PDA_POIS), one merchant in it, standing where the
+    # view starts - and the Madeira pack has no companion-app merchant in
+    # it, so the second record is written by hand: one that needs its own
+    # app must not be offered [REQUEST] (BTC_MAP_INTEGRATION.md 7.1), and
+    # the card is what carries the rule.
+    pois = os.path.join(LOGDIR, "pois")
+    pack = os.path.join(pois, "ui-test")
+    os.makedirs(pack, exist_ok=True)
+    with open(os.path.join(pack, "pack.cfg"), "w") as fh:
+        fh.write("name ui-test\nsource ui-test\n")
+
+    def place(name, flags, lat=32.6478, lon=-16.9193):
+        """one 152-byte record - the layout src/poi.h and fetch_btc.py share"""
+        rec = struct.pack("<dd", lat, lon)
+        rec += name.encode()[:47].ljust(48, b"\0")
+        rec += b"1 High Street".ljust(64, b"\0")
+        rec += b"cafe".ljust(16, b"\0")
+        rec += bytes([flags, 0]) + struct.pack("<H", 2025)
+        rec += b"\0" * 4                # the tail padding the C struct has
+        if len(rec) != 152:
+            raise AssertionError("a place is 152 bytes, this is %d" % len(rec))
+        return rec
+
+    def write_pack(rec):
+        with open(os.path.join(pack, "places.bin"), "wb") as fh:
+            fh.write(rec)
+
+    def accent(path, x0, y0, x1, y1):
+        """the accent colour in a box of the app (the title bar is on top).
+
+        The settings file below is a fresh one, so the accent is the default
+        amber; and the card draws its own background over the map, so only
+        the card's amber can land in here. """
+        from PIL import Image
+        im = Image.open(path).convert("RGB")
+        w, h = im.size
+        off = h - 480
+        px = im.load()
+        n = 0
+        for y in range(y0 + off, min(y1 + off, h)):
+            for x in range(x0, min(x1, w)):
+                r, g, b = px[x, y]
+                if abs(r - 201) < 24 and abs(g - 162) < 24 and abs(b - 39) < 24:
+                    n += 1
+        return n
+
+    # where the card's own parts are, in app coordinates: the card sits at
+    # the bottom left of the map (y 412), its padding and border put the
+    # content at 13,417 - the name row, then the button on the right
+    NAME_BOX = (13, 419, 313, 432)
+    BTN_BOX = (321, 425, 419, 451)
+    BTN_MID = (370, 438)
+    CENTER = (400, 69 + 205)        # the view starts on the GPS fix: our place
+    TRADERS = (163 + 148 + 6, 45)   # the Traders button of the second row
+    CARD_ENV = {"PDA_START_TAB": "0", "PDA_WALLET_BACKEND": "mock",
+                "PDA_WALLET_MOCK": mockfile, "PDA_POIS": pois,
+                "PDA_GPS_LAT": "32.6478", "PDA_GPS_LON": "-16.9193"}
+
+    def open_card(prefs, name, flags, shot_name):
+        """start the app, put the Traders on, tap the place: the card"""
+        for pth in (prefs, mockfile):
+            if os.path.exists(pth):
+                os.unlink(pth)
+        env = dict(CARD_ENV)
+        env["PDA_PREFS"] = prefs
+        write_pack(place(name, flags))
+        proc, out, log = start(env, shot_name)
+        time.sleep(3.0)
+        click_once(*TRADERS)        # the layer is off at boot
+        time.sleep(0.6)
+        click_once(*CENTER)         # a tap on the merchant
+        time.sleep(0.8)
+        return proc, out, log, shot(shot_name)
+
+    card_prefs = os.path.join(LOGDIR, "card_prefs.conf")
+    p, f, logpath, path = open_card(card_prefs, "Ordinary Coffee",
+                                    0x01 | 0x10, "wallet_card")
+    try:
+        named = accent(path, *NAME_BOX)
+        note(named > 50, f"the merchant's card comes up with its name on it ({named} px)")
+        btn = accent(path, *BTN_BOX)
+        note(btn > 50, f"and it carries a [REQUEST] button ({btn} px)")
+
+        click_once(*BTN_MID)        # the button itself
+        time.sleep(1.0)
+        path = shot("wallet_card_req")
+        note(qr_bright(path) > 500, "[REQUEST] opens the Wallet with a QR code on it")
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("[wallet] memo: Ordinary Coffee" in log,
+             "the merchant's name is the memo the invoice was made for")
+        note(app_alive(p, logpath), "the app is alive through the merchant card")
+    finally:
+        stop(p, f)
+
+    # a merchant that needs its own app will not take a plain BOLT11, so it
+    # gets no button - and no invoice is asked for behind the user's back
+    p, f, logpath, path = open_card(card_prefs, "Needs Its Own App",
+                                    0x01 | 0x10 | 0x20, "wallet_card_comp")
+    try:
+        named = accent(path, *NAME_BOX)
+        note(named > 50, f"its card comes up all the same ({named} px)")
+        btn = accent(path, *BTN_BOX)
+        note(btn <= 5, f"a companion-app merchant gets no [REQUEST] button ({btn} px)")
+
+        click_once(*BTN_MID)        # where the button would have been
+        time.sleep(1.0)
+        with open(logpath, errors="replace") as fh:
+            log = fh.read()
+        note("[wallet] invoice:" not in log and "[wallet] memo:" not in log,
+             "and nothing is asked for on its behalf")
+        note(app_alive(p, logpath), "the app is alive on a companion-app merchant")
     finally:
         stop(p, f)
 

@@ -26,10 +26,61 @@ def free_port():
     return p
 
 
+# where the app's client area is in root coordinates. The window manager
+# puts the window wherever there is a gap, so it is read out of the X tree
+# every time instead of assumed - a click aimed at 560,300 on a desktop
+# that did not put it there lands on the wallpaper, while the screenshot
+# still comes out perfect (tools/ui_test.py reads the same thing).
+OX, OY = 560, 300
+
+
+def window_origin():
+    global OX, OY
+    from Xlib import display, X
+    d = display.Display()
+    try:
+        root = d.screen().root
+        utf8 = d.intern_atom("UTF8_STRING")
+        wm_name = d.intern_atom("_NET_WM_NAME")
+        clients = root.get_full_property(d.intern_atom("_NET_CLIENT_LIST"),
+                                         X.AnyPropertyType)
+        if not clients:
+            return
+        for wid in clients.value:
+            w = d.create_resource_object("window", wid)
+            try:
+                prop = w.get_property(wm_name, utf8, 0, 1024)
+            except Exception:
+                continue
+            if not prop or not prop.value:
+                continue
+            title = prop.value if isinstance(prop.value, bytes) \
+                else str(prop.value).encode()
+            if b"PDA // Simulator" not in title:
+                continue
+            x = y = 0
+            cur = w
+            while cur.id != root.id:      # the client is in a frame
+                g = cur.get_geometry()
+                x += g.x
+                y += g.y
+                cur = cur.query_tree().parent
+            OX, OY = x, y
+            return
+    finally:
+        d.close()
+
+
+def focus_window():
+    """raise the app's window, then read where it landed"""
+    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
+    time.sleep(0.5)
+    window_origin()
+
+
 def capture(path):
     """grab the app's window and crop the decoration away"""
-    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
-    time.sleep(0.6)
+    focus_window()
     tmp = "/tmp/opencode/shot_tmp.png"
     subprocess.run(["gnome-screenshot", "-w", "-f", tmp], capture_output=True)
     try:
@@ -48,13 +99,12 @@ def capture(path):
 
 
 def click(x, y):
-    """one click, in the app's own coordinates (the window is at 560,300)"""
+    """one click, in the app's own coordinates"""
     from Xlib import display, X
     from Xlib.ext import xtest
-    subprocess.run(["wmctrl", "-a", "PDA // Simulator"], capture_output=True)
-    time.sleep(0.4)
+    focus_window()
     d = display.Display()
-    sx, sy = 560 + x, 300 + y
+    sx, sy = OX + x, OY + y
     xtest.fake_input(d, X.MotionNotify, x=sx, y=sy); d.sync(); time.sleep(0.08)
     xtest.fake_input(d, X.ButtonPress, 1); d.sync(); time.sleep(0.08)
     xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.5)
@@ -80,6 +130,26 @@ def run(env_extra, shot_name, before=None, after=None):
     time.sleep(0.6)
 
 
+def first_place():
+    """the first merchant of the first traders pack, as (lat, lon).
+
+    The card picture wants the view to start on a real place, so one tap in
+    the middle of the map is all it takes. The records are 152 bytes and
+    the coordinates are the first 16 of them (src/poi.h). None when there
+    is no pack: the picture is then left out rather than taken of nothing. """
+    import glob
+    import struct
+    packs = sorted(glob.glob(os.path.join(ROOT, "assets", "poi", "*", "places.bin")))
+    if not packs:
+        return None
+    with open(packs[0], "rb") as fh:
+        rec = fh.read(152)
+    if len(rec) != 152:
+        return None
+    lat, lon = struct.unpack("<dd", rec[:16])
+    return (f"{lat}", f"{lon}")        # str() round-trips a double exactly
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     subprocess.run(["pkill", "-x", "pda"], capture_output=True)
@@ -91,6 +161,27 @@ def main():
 
     run({"PDA_START_TAB": "0", "PDA_GPS_LAT": "32.6478", "PDA_GPS_LON": "-16.9193"},
         "area-map.png", before=traders_on)
+
+    # the merchant card: the first place of the traders pack, with the view
+    # started on it, so one tap at the middle of the map is enough
+    place = first_place()
+    if place:
+        lat, lon = place
+
+        def card_on():
+            click(163 + 148 + 6, 45)    # the Traders button of the second row
+            click(400, 69 + 205)        # the merchant the view starts on
+
+        run({"PDA_START_TAB": "0", "PDA_GPS_LAT": lat, "PDA_GPS_LON": lon},
+            "merchant-card.png", before=card_on)
+
+    # the Wallet: an invoice as a QR code, which is what the merchant scans
+    def open_request():
+        click(142, 390)                 # the REQUEST button of the balance screen
+
+    run({"PDA_START_TAB": "5", "PDA_WALLET_BACKEND": "mock",
+         "PDA_WALLET_MOCK": "/tmp/opencode/make_shots.mock"},
+        "wallet-request.png", before=open_request)
 
     # the other tab
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1", "PDA_OTHER_SUB": "0"},
@@ -124,7 +215,11 @@ def main():
             time.sleep(0.25)
         time.sleep(1.0)
 
-    run({"PDA_START_TAB": "1", "PDA_RELAY_PORT": str(port), "PDA_NAME": "Satscraft",
+    # PDA_RELAY_HOST is what asks for the uplink at all - with only the
+    # port set the app stays on the local net and the picture comes out
+    # with nobody in the room (net.c, net_init)
+    run({"PDA_START_TAB": "1", "PDA_RELAY_HOST": "127.0.0.1",
+         "PDA_RELAY_PORT": str(port), "PDA_NAME": "Satscraft",
          "PDA_TEST_SEND": "on my way, ten minutes"},
         "messages.png", before=talk)
     peer.close()
