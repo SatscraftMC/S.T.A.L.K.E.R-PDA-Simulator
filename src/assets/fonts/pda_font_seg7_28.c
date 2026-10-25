@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 28 px
  * Bpp: 1
- * Opts: --font /home/aj/pda-project/app/build/fonts-src/DSEG7Classic-Regular.ttf --size 28 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x7F --lv-font-name pda_font_seg7_28 -o /home/aj/pda-project/app/src/assets/fonts/pda_font_seg7_28.c
+ * Opts: --font /home/aj/vibing/projects/pda-project/app/build/fonts-src/DSEG7Classic-Regular.ttf --size 28 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x7F --lv-font-name pda_font_seg7_28 -o /home/aj/vibing/projects/pda-project/app/src/assets/fonts/pda_font_seg7_28.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

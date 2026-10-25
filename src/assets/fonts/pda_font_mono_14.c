@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 14 px
  * Bpp: 1
- * Opts: --font /home/aj/pda-project/app/build/fonts-src/ShareTechMono-Regular.ttf --size 14 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x17F --lv-font-name pda_font_mono_14 -o /home/aj/pda-project/app/src/assets/fonts/pda_font_mono_14.c
+ * Opts: --font /home/aj/vibing/projects/pda-project/app/build/fonts-src/ShareTechMono-Regular.ttf --size 14 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x17F --lv-font-name pda_font_mono_14 -o /home/aj/vibing/projects/pda-project/app/src/assets/fonts/pda_font_mono_14.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 1
- * Opts: --font /home/aj/pda-project/app/build/fonts-src/VT323-Regular.ttf --size 20 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x17F --lv-font-name pda_font_title_20 -o /home/aj/pda-project/app/src/assets/fonts/pda_font_title_20.c
+ * Opts: --font /home/aj/vibing/projects/pda-project/app/build/fonts-src/VT323-Regular.ttf --size 20 --bpp 1 --format lvgl --lv-include lvgl.h --no-compress -r 0x20-0x17F --lv-font-name pda_font_title_20 -o /home/aj/vibing/projects/pda-project/app/src/assets/fonts/pda_font_title_20.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

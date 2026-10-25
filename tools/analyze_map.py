@@ -11,6 +11,9 @@ Checks, on real screenshots:
 import math, os, struct, subprocess, sys, time
 from PIL import Image
 
+# the app directory, wherever this repo lives - never a hardcoded home path
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 LADDER = [64, 96, 128, 170, 256, 341, 512, 683, 1024, 1365, 2048, 2730, 4096, 5461, 8192, 10923]
 SHOT = "/tmp/opencode/an"
 CLIENT = (560, 300)          # window client origin
@@ -159,7 +162,7 @@ def main():
     subprocess.run(["pkill", "-x", "pda"], capture_output=True)
     time.sleep(0.4)
     env = dict(os.environ, PDA_GPS_LAT="32.66", PDA_GPS_LON="-16.96")
-    subprocess.Popen(["./build/pda"], cwd="/home/aj/pda-project/app", env=env,
+    subprocess.Popen(["./build/pda"], cwd=ROOT, env=env,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(60):
         out = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True).stdout
@@ -200,11 +203,11 @@ def main():
 
     print("== 4. geo alignment vs masters ==")
     madeira = (12, 3495, 2838, 473752, 421949,
-               "/home/aj/pda-project/app/assets/maps/madeira/z12.rgb565")
+               os.path.join(ROOT, "assets/maps/madeira/z12.rgb565"))
     island = (14, 8388, 8992, 1895592, 1690158,
-              "/home/aj/pda-project/app/assets/maps/madeira-island/z14.rgb565")
+              os.path.join(ROOT, "assets/maps/madeira-island/z14.rgb565"))
     funchal = (15, 4194, 2214, 3797942, 3387526,
-               "/home/aj/pda-project/app/assets/maps/funchal/z15.rgb565")
+               os.path.join(ROOT, "assets/maps/funchal/z15.rgb565"))
     # frame index i  <->  ladder index i+4 (frame 0 is the boot view = zn 256)
     for fidx, lidx, pack, label in [(0, 4, madeira, "z12 @256"),
                                     (4, 8, island, "z14 @1024"),
@@ -221,7 +224,7 @@ def main():
         subprocess.run(["pkill", "-x", "pda"], capture_output=True)
         time.sleep(0.4)
         env = dict(os.environ, PDA_GPS_LAT="32.66", PDA_GPS_LON="-16.96")
-        subprocess.Popen(["./build/pda"], cwd="/home/aj/pda-project/app", env=env,
+        subprocess.Popen(["./build/pda"], cwd=ROOT, env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(60):
             out = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True).stdout
