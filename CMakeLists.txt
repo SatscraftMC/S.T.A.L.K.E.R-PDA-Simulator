@@ -34,6 +34,15 @@ set(SECP256K1_ENABLE_MODULE_SILENTPAYMENTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_ENABLE_MODULE_EXTRAKEYS ON CACHE BOOL "" FORCE)
 set(SECP256K1_ENABLE_MODULE_SCHNORRSIG ON CACHE BOOL "" FORCE)
 set(SECP256K1_VALGRIND "OFF" CACHE STRING "" FORCE)
+# secp256k1 probes optional warning flags and caches the answers, and this
+# build/ directory is shared by two compilers: the sandbox's gcc 15 answers
+# "yes" to -Wleading-whitespace / -Wtrailing-whitespace (GCC >= 15 only),
+# the host's gcc 13 compiles from the same cache and dies with
+# "unrecognized command-line option". Both are cosmetic warnings, so the
+# probes are pinned off here: an older compiler is never handed a flag a
+# newer one agreed to.
+set(C_SUPPORTS__WLEADING_WHITESPACE_SPACES 0 CACHE INTERNAL "" FORCE)
+set(C_SUPPORTS__WTRAILING_WHITESPACE_ANY 0 CACHE INTERNAL "" FORCE)
 add_subdirectory(third_party/secp256k1)
 
 file(GLOB_RECURSE PDA_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
