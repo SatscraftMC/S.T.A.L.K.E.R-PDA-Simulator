@@ -1,6 +1,8 @@
 #include "chat/chat.h"
 #include "chat/json.h"
 #include "ui/prefs.h"
+#include "identity/identity.h"
+#include "identity/contacts.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,6 +154,12 @@ const chat_transport_t * chat_transport_get(int i)
 
 void chat_init(void)
 {
+    /* the key first (it may write a SYSTEM line and go on unsigned), then
+       the trust list - both run right after prefs_init(), so prefs_path()
+       resolves the config directory they live in */
+    identity_init();
+    contacts_load();
+
     /* every carrier sends to begin with */
     for(int i = 0; i < CHAT_TRANSPORT_MAX; i++) s_enabled[i] = true;
 
@@ -255,37 +263,132 @@ static void push(const chat_msg_t * m)
     s_count++;
 }
 
-void chat_deliver(int transport, const char * id, const char * sender,
-                  const char * text)
+/* is this exactly n lowercase hex characters? (the wire format of id,
+   pubkey and sig - uppercase is malformed, per NIP-01's lowercase rules) */
+static bool hex_ok(const char * s, size_t n)
 {
-    if(!text || !*text) return;
+    if(!s || strlen(s) != n) return false;
+    for(size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if(!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
 
-    char mid[CHAT_ID_MAX];
-    if(id && *id) snprintf(mid, sizeof(mid), "%.*s", (int)sizeof(mid) - 1, id);
-    else make_id(mid, sizeof(mid));
+/* The one inbound choke point: an event line a carrier already handed over
+   (the t/legacy dispatch lives in the carriers). Exactly these rules, none
+   of them left to the builder:
 
+     1. kind must parse to 1, else the line is dropped as legacy
+     2. parse with our own scratch buffers; content > 240 and a truncated
+        tags substring are dropped before any verify attempt
+     3. empty content is never delivered
+     4. verify -> CHAT_SIG_OK / CHAT_SIG_BAD / CHAT_SIG_NONE, by these
+        boundaries alone
+     5. note the speaker (only a verified, non-own key), push the message  */
+void chat_deliver_line(int transport, const char * line)
+{
+    if(!line || !*line) return;
+
+    long kind = 0;
+    if(!json_get_int(line, "kind", &kind) || kind != 1) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] legacy line dropped\n");
+        return;
+    }
+
+    char id[CHAT_ID_MAX] = "", pub[65] = "", sig[129] = "";
+    char content[512] = "", tags_raw[512] = "";
+    json_get(line, "id", id, sizeof(id));
+    json_get(line, "pubkey", pub, sizeof(pub));
+    json_get(line, "sig", sig, sizeof(sig));
+    json_get(line, "content", content, sizeof(content));
+    bool have_tags = json_get(line, "tags", tags_raw, sizeof(tags_raw));
+    long created_at = 0;
+    bool have_ts = json_get_int(line, "created_at", &created_at);
+
+    /* the size caps: never display truncated content, never recompute an id
+       over truncated tags (a truncation at 511 is over 240 too, so
+       content's rule catches its own truncations) */
+    if(strlen(content) > 240) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] event dropped: content too long\n");
+        return;
+    }
+    if(have_tags && strlen(tags_raw) >= 511) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] event dropped: tags too long\n");
+        return;
+    }
+
+    if(!content[0]) return;              /* empty content is never delivered */
+
+    /* verify -> one of three states, decided by the boundaries alone */
+    bool claim = pub[0] != 0 && sig[0] != 0;
+    chat_sig_t st = claim ? CHAT_SIG_BAD : CHAT_SIG_NONE;
+    if(claim && hex_ok(pub, 64) && hex_ok(sig, 128) && hex_ok(id, 64) && have_ts) {
+        char tags_json[2048];
+        char ser[2048];
+        char re_id[65];
+        if(json_tags_rebuild(line, tags_json, sizeof(tags_json)) &&
+           chat_event_serialize(ser, sizeof(ser), pub, created_at, 1,
+                                tags_json, content) &&
+           identity_event_id(ser, re_id) &&
+           strcmp(re_id, id) == 0 &&          /* the mandatory id recheck */
+           identity_verify_id(pub, id, sig)) {
+            st = CHAT_SIG_OK;
+        }
+    }
+
+    char name_tag[128] = "";
+    json_tag(line, "name", name_tag, sizeof(name_tag));
     char who[CHAT_NAME_MAX];
     snprintf(who, sizeof(who), "%.*s", (int)sizeof(who) - 1,
-             (sender && *sender) ? sender : "UNKNOWN");
+             name_tag[0] ? name_tag : "UNKNOWN");
+    time_t ts = have_ts ? (time_t)created_at : time(NULL);
 
-    if(seen_before(mid, who, text)) return;
-    remember(mid, who, text);
+    if(getenv("PDA_DEBUG")) {
+        if(st == CHAT_SIG_OK) fprintf(stderr, "[chat] sig ok pub=%s\n", pub);
+        else if(st == CHAT_SIG_BAD)
+            fprintf(stderr, "[chat] sig bad pub=%s from=%s\n", pub, who);
+        else fprintf(stderr, "[chat] unsigned from=%s\n", who);
+    }
+
+    /* de-dup on the event id when it is well formed, else a local one */
+    char mid[CHAT_ID_MAX];
+    if(hex_ok(id, 64)) snprintf(mid, sizeof(mid), "%s", id);
+    else make_id(mid, sizeof(mid));
+
+    /* a verified key we have heard: pressable in the SEEN section. An
+       unsigned or forged claim never becomes one, and neither does our own
+       key (you do not trust yourself) */
+    if(st == CHAT_SIG_OK && pub[0] && strcmp(pub, identity_pub_hex()) != 0)
+        chat_note_speaker(pub, who);
+
+    /* the label of a trusted contact follows the name it signs with - but
+       only when a name tag is there at all (a missing one is not a rename) */
+    if(st == CHAT_SIG_OK && name_tag[0] && contacts_has(pub)) {
+        const char * stored = contacts_name(pub);
+        if(!stored || strcmp(stored, name_tag) != 0) contacts_trust(pub, name_tag);
+    }
+
+    if(seen_before(mid, who, content)) return;
+    remember(mid, who, content);
 
     chat_msg_t m;
     memset(&m, 0, sizeof(m));
     snprintf(m.id, sizeof(m.id), "%s", mid);
     snprintf(m.sender, sizeof(m.sender), "%s", who);
-    snprintf(m.text, sizeof(m.text), "%.*s", (int)sizeof(m.text) - 1, text);
+    snprintf(m.text, sizeof(m.text), "%.*s", (int)sizeof(m.text) - 1, content);
     m.kind = CHAT_KIND_MSG;
     m.transport = transport;
     m.outbound = false;
-    m.ts = time(NULL);
+    m.ts = ts;
+    snprintf(m.pub, sizeof(m.pub), "%s", claim ? pub : "");
+    m.sig = st;
     push(&m);
     s_unread++;
     if(getenv("PDA_DEBUG")) {
         const chat_transport_t * tr = chat_transport_get(transport);
         fprintf(stderr, "[chat] recv via %s from %s: %s\n",
-                tr ? tr->tag : "?", who, text);
+                tr ? tr->tag : "?", who, content);
     }
 }
 
@@ -301,34 +404,120 @@ void chat_system(const char * text)
     m.outbound = false;
     m.ts = time(NULL);
     push(&m);
+    /* the SYSTEM line lives in the message log; under PDA_DEBUG it also
+       reaches the log the driver suites read (an honest failure that only
+       ever showed on a screen nobody is looking at is not a report) */
+    if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] system: %s\n", m.text);
 }
 
-void chat_envelope(char * out, size_t outn, const char * id, const char * sender,
-                   const char * text, long ts)
+bool chat_event_serialize(char * out, size_t outn, const char * pubkey_hex,
+                          long created_at, long kind, const char * tags_json,
+                          const char * content)
 {
-    char e_id[CHAT_ID_MAX * 6], e_from[CHAT_NAME_MAX * 6], e_text[CHAT_TEXT_MAX * 6];
-    char e_chan[CHAT_ROOM_MAX * 6];
-    json_escape(id ? id : "", e_id, sizeof(e_id));
-    json_escape(sender ? sender : "", e_from, sizeof(e_from));
-    json_escape(text ? text : "", e_text, sizeof(e_text));
+    if(!out || outn == 0 || !pubkey_hex || !tags_json || !content) return false;
+    out[0] = 0;
+    if(strlen(content) > 240) return false;    /* the caps are defined here */
+
+    char e_content[1536];                      /* 240 * 6 worst escaped */
+    json_escape(content, e_content, sizeof(e_content));
+    int w = snprintf(out, outn, "[0,\"%s\",%ld,%ld,%s,\"%s\"]",
+                     pubkey_hex, created_at, kind, tags_json, e_content);
+    if(w < 0 || (size_t)w >= outn) { out[0] = 0; return false; }
+    return true;
+}
+
+/* the line as it goes on the wire (the unsigned shape has no sig field) */
+static bool emit_event(char * out, size_t outn, const char * id, const char * pub,
+                       long created_at, const char * tags_json,
+                       const char * content, const char * sig)
+{
+    char e_content[1536];
+    json_escape(content, e_content, sizeof(e_content));
+    int w;
+    if(sig) {
+        w = snprintf(out, outn,
+                     "{\"id\":\"%s\",\"pubkey\":\"%s\",\"created_at\":%ld,\"kind\":1,"
+                     "\"tags\":%s,\"content\":\"%s\",\"sig\":\"%s\"}",
+                     id, pub, created_at, tags_json, e_content, sig);
+    }
+    else {
+        w = snprintf(out, outn,
+                     "{\"id\":\"%s\",\"pubkey\":\"%s\",\"created_at\":%ld,\"kind\":1,"
+                     "\"tags\":%s,\"content\":\"%s\"}",
+                     id, pub, created_at, tags_json, e_content);
+    }
+    if(w < 0 || (size_t)w >= outn) { out[0] = 0; return false; }
+    return true;
+}
+
+/* true when the last chat_event_build() went out signed (chat_send records
+   that honestly in its own log row: a real pubkey and CHAT_SIG_OK) */
+static bool s_last_built_signed = false;
+
+bool chat_event_build(char * out, size_t outn, char * id_out,
+                      long created_at, const char * text)
+{
+    if(!out || outn == 0 || !id_out || !text) return false;
+    out[0] = 0;
+    id_out[0] = 0;
+    s_last_built_signed = false;
+
+    char e_room[160], e_chan[160], e_name[224];
+    json_escape(s_room, e_room, sizeof(e_room));
     json_escape(s_chan, e_chan, sizeof(e_chan));
-    snprintf(out, outn,
-             "{\"v\":1,\"t\":\"msg\",\"id\":\"%s\",\"from\":\"%s\",\"room\":\"%s\","
-             "\"chan\":\"%s\",\"text\":\"%s\",\"ts\":%ld}",
-             e_id, e_from, s_room, e_chan, e_text, ts);
+    json_escape(s_id, e_name, sizeof(e_name));
+
+    char tags[640];
+    int tw = snprintf(tags, sizeof(tags),
+                      "[[\"room\",\"%s\"],[\"chan\",\"%s\"],[\"name\",\"%s\"]]",
+                      e_room, e_chan, e_name);
+    if(tw < 0 || (size_t)tw >= sizeof(tags)) return false;
+
+    char ser[2048], id[65], sig[129];
+    const char * pub = identity_pub_hex();
+
+    if(pub[0] &&
+       chat_event_serialize(ser, sizeof(ser), pub, created_at, 1, tags, text) &&
+       identity_event_id(ser, id) &&
+       identity_sign_id(id, sig) &&
+       emit_event(out, outn, id, pub, created_at, tags, text, sig)) {
+        s_last_built_signed = true;
+        snprintf(id_out, 65, "%s", id);
+        return true;
+    }
+
+    /* no usable key (init failed, or the sign refused): the unsigned
+       shape, same call, one caller - hashing still gives the line a real
+       id, and if even that fails we return false and send nothing */
+    out[0] = 0;
+    if(chat_event_serialize(ser, sizeof(ser), "", created_at, 1, tags, text) &&
+       identity_event_id(ser, id) &&
+       emit_event(out, outn, id, "", created_at, tags, text, NULL)) {
+        snprintf(id_out, 65, "%s", id);
+        return true;
+    }
+    out[0] = 0;
+    id_out[0] = 0;
+    return false;
 }
 
 bool chat_send(const char * text)
 {
     if(!text || !*text) return false;
 
-    char id[CHAT_ID_MAX];
-    make_id(id, sizeof(id));
+    /* one event, one created_at, one id and - with deterministic signing -
+       one signature: every carrier ships the identical bytes */
+    char event[2048];
+    char id[CHAT_ID_MAX] = "";
+    bool built = chat_event_build(event, sizeof(event), id, (long)time(NULL), text);
+    bool signed_out = built && s_last_built_signed;
+
+    if(!built) make_id(id, sizeof(id));   /* local-only row id, never sent */
 
     bool any = false;
     char why[200] = "";       /* the carriers that did not take it, and why */
 
-    for(int i = 0; i < s_n_tr; i++) {
+    if(built) for(int i = 0; i < s_n_tr; i++) {
         chat_transport_t * t = s_tr[i];
         if(!t) continue;
 
@@ -340,7 +529,7 @@ bool chat_send(const char * text)
             if(t->status[0]) snprintf(one, sizeof(one), "%s %s", t->tag, t->status);
             else snprintf(one, sizeof(one), "%s down", t->tag);
         }
-        else if(t->send(t, text, id)) {
+        else if(t->send(t, event, id)) {
             any = true;
         }
         else {
@@ -362,11 +551,19 @@ bool chat_send(const char * text)
     m.transport = -1;
     m.outbound = true;
     m.ts = time(NULL);
+    /* outbound rows record what actually happened: a signed send carries
+       our own pubkey, an identity-failure send "" - honest either way, and
+       neither ever shows the badge (you don't need one for yourself) */
+    if(signed_out) snprintf(m.pub, sizeof(m.pub), "%s", identity_pub_hex());
+    m.sig = signed_out ? CHAT_SIG_OK : CHAT_SIG_NONE;
     push(&m);
     remember(m.id, m.sender, m.text);   /* so our own echo is not shown twice */
 
     if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] sent: %s\n", text);
-    if(!any) {
+    if(!built) {
+        chat_system("could not build the message - kept locally, not sent");
+    }
+    else if(!any) {
         char line[CHAT_TEXT_MAX + 64];
         snprintf(line, sizeof(line), "no carrier up - kept locally (%s)",
                  why[0] ? why : "nothing enabled");
@@ -439,4 +636,78 @@ const chat_peer_t * chat_peer_at(int i)
 {
     if(i < 0 || i >= s_n_peers) return NULL;
     return &s_peers[i];
+}
+
+/* ---------- the speakers heard this session (the SEEN section) ---------- */
+
+/* Noted from chat_deliver_line() only for events with CHAT_SIG_OK and a
+   non-empty pubkey that is not our own - an unsigned or forged claim is
+   exactly what cannot become pressable in the Trust UI. Session-only:
+   saved contacts persist, this list does not. */
+
+static chat_speaker_t s_speakers[CHAT_PEER_MAX];
+static int s_n_speakers = 0;
+static unsigned s_speaker_version = 0;
+
+void chat_note_speaker(const char * pub, const char * name)
+{
+    if(!pub || !*pub) return;
+    time_t now = time(NULL);
+
+    for(int i = 0; i < s_n_speakers; i++) {
+        if(strcmp(s_speakers[i].pub, pub) != 0) continue;
+        s_speakers[i].last = now;
+        if(name && *name)
+            snprintf(s_speakers[i].name, sizeof(s_speakers[i].name), "%s", name);
+        s_speaker_version++;
+        return;
+    }
+
+    /* the quietest goes, the way the mesh peers do */
+    if(s_n_speakers >= CHAT_PEER_MAX) {
+        int oldest = 0;
+        for(int i = 1; i < s_n_speakers; i++)
+            if(s_speakers[i].last < s_speakers[oldest].last) oldest = i;
+        for(int j = oldest; j < s_n_speakers - 1; j++)
+            s_speakers[j] = s_speakers[j + 1];
+        s_n_speakers--;
+        s_speaker_version++;
+    }
+
+    snprintf(s_speakers[s_n_speakers].pub, sizeof(s_speakers[s_n_speakers].pub),
+             "%s", pub);
+    snprintf(s_speakers[s_n_speakers].name, sizeof(s_speakers[s_n_speakers].name),
+             "%s", (name && *name) ? name : "UNKNOWN");
+    s_speakers[s_n_speakers].last = now;
+    s_n_speakers++;
+    s_speaker_version++;
+}
+
+/* the quiet-timeout sweep lives in the count, exactly like
+   chat_peer_count() (chat.c's mesh peers at the same 300 s) */
+int chat_speaker_count(void)
+{
+    time_t now = time(NULL);
+    for(int i = 0; i < s_n_speakers; ) {
+        if(now - s_speakers[i].last > 300) {
+            for(int j = i; j < s_n_speakers - 1; j++)
+                s_speakers[j] = s_speakers[j + 1];
+            s_n_speakers--;
+            s_speaker_version++;
+            continue;
+        }
+        i++;
+    }
+    return s_n_speakers;
+}
+
+const chat_speaker_t * chat_speaker_at(int i)
+{
+    if(i < 0 || i >= s_n_speakers) return NULL;
+    return &s_speakers[i];
+}
+
+unsigned chat_speaker_version(void)
+{
+    return s_speaker_version;
 }

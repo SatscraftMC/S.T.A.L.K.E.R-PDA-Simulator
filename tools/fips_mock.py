@@ -12,6 +12,7 @@ It then does what a node on the mesh would do: announce a peer to the
 listener and talk over the flow.
 """
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -172,6 +173,18 @@ class MockFips:
             except OSError as e:
                 self.log("announce failed:", e)
 
+    @staticmethod
+    def event(content, tags, created_at=None):
+        """the unsigned event shape: pubkey "", no sig - hashing needs no
+        key. Serialization matches the app's (compact, UTF-8 verbatim), so
+        the id is the SHA-256 of exactly what the receiver will rebuild."""
+        ts = int(created_at if created_at is not None else time.time())
+        ser = json.dumps([0, "", ts, 1, tags, content],
+                         separators=(",", ":"), ensure_ascii=False)
+        eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+        return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                "tags": tags, "content": content}
+
     def send_to_peer(self, text, peer=None, sender="ROOK"):
         """write a message onto the flow, the way a peer would"""
         peer = peer or self.peer
@@ -185,9 +198,7 @@ class MockFips:
         if target is None:
             self.log("no flow for", peer)
             return False
-        payload = json.dumps({"v": 1, "t": "msg", "id": "m1", "from": sender,
-                              "room": "SECTOR", "text": text,
-                              "ts": int(time.time())}).encode()
+        payload = json.dumps(self.event(text, [["name", sender]])).encode()
         target.send(payload)
         self.log("sent to peer:", text)
         return True
@@ -204,7 +215,15 @@ class MockFips:
             data = s.recv(4096)
         except (socket.timeout, OSError):
             return None
-        self.log("got from client:", data[:120])
+        # a NIP-01 line puts content a couple of hundred bytes in: read the
+        # content out instead of a fixed window, so chat_test's assertion
+        # about the message text can find it
+        try:
+            m = json.loads(data)
+            shown = m.get("content") or m.get("text") or ""
+        except json.JSONDecodeError:
+            shown = ""
+        self.log("got from client:", shown if shown else data[:400])
         return data
 
 

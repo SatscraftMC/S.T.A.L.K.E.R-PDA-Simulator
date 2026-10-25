@@ -9,6 +9,7 @@
 #include "ui/chat_ui.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
+#include "identity/identity.h"
 #include "gps.h"
 
 #include <arpa/inet.h>
@@ -102,6 +103,11 @@ static void on_save_name(lv_event_t * e);
 static void on_save_room(lv_event_t * e);
 static void on_save_channel(lv_event_t * e);
 static void other_ui_on_channel(lv_event_t * e);
+static void build_content(void);
+static void on_key_toggle(lv_event_t * e);
+static void on_new_click(lv_event_t * e);
+static void other_ui_on_paste(lv_event_t * e);
+static void on_paste_click(lv_event_t * e);
 static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb);
 static void on_toggle_click(lv_event_t * e);
 static void on_reset_log(lv_event_t * e);
@@ -145,9 +151,24 @@ typedef struct {
     lv_obj_t * room_btn;
     lv_obj_t * name_btn_lbl;
     lv_obj_t * room_btn_lbl;
+
+    /* the identity rows under IDENTITY: the nstr key, the reveal block,
+       [KEY] / [NEW] / [PASTE] and the import field */
+    lv_obj_t * key_btn_lbl;
+    lv_obj_t * new_btn_lbl;
+    lv_obj_t * paste_btn_lbl;
+    lv_obj_t * paste_ta;
 } other_ui_t;
 
 static other_ui_t g_ui;
+
+/* the nstr reveal on the User page: up only until anything else happens
+   (navigation, retheme, leaving the Other tab - other_ui_hide_secrets is
+   the shell's hook for that last one), and never at boot */
+static bool s_show_key = false;
+/* the second press of [NEW] confirms an irreversible regeneration */
+static bool s_new_armed = false;
+
 static char s_version[32] = "";
 static char s_gps[64] = "";
 
@@ -878,6 +899,44 @@ static void flash_saved(lv_obj_t * btn, lv_obj_t * lbl)
     lv_timer_resume(s_flash_timer);
 }
 
+/* The flash on [KEY]/[NEW]/[PASTE]: same single 1500 ms timer as
+   flash_saved, but it restores *this button's* label (flash_saved is for
+   SAVE buttons only and must not be reused here). Its timer is registered
+   with build_content()'s flash cleanup exactly like s_flash_timer, so a
+   rebuild during a pending flash never leaves a timer pointing at a
+   deleted label. */
+static lv_timer_t * s_key_flash_timer = NULL;
+static char s_key_flash_restore[16];
+
+static void key_flash_cb(lv_timer_t * timer)
+{
+    lv_obj_t * l = (lv_obj_t *)lv_timer_get_user_data(timer);
+    if(l) {
+        lv_label_set_text(l, s_key_flash_restore);
+        lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    }
+    s_key_flash_timer = NULL;      /* the timer deletes itself: say so */
+    lv_timer_delete(timer);
+}
+
+/* shown = what the label says for the flash, restore = its own text after
+   1500 ms, color = green for a success, the failure colour for FAILED */
+static void flash_btn(lv_obj_t * lbl, const char * shown, const char * restore,
+                      uint32_t color)
+{
+    if(!lbl) return;
+    lv_label_set_text(lbl, shown);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), LV_PART_MAIN);
+    snprintf(s_key_flash_restore, sizeof(s_key_flash_restore), "%s", restore);
+    if(s_key_flash_timer) {
+        lv_timer_t * old = s_key_flash_timer;
+        s_key_flash_timer = NULL;
+        lv_timer_delete(old);
+    }
+    s_key_flash_timer = lv_timer_create(key_flash_cb, 1500, NULL);
+    lv_timer_set_user_data(s_key_flash_timer, lbl);
+}
+
 /* a row with a switch on the right */
 static void toggle_row(lv_obj_t * parent, const char * name, const char * key)
 {
@@ -892,6 +951,44 @@ static void toggle_row(lv_obj_t * parent, const char * name, const char * key)
         snprintf(g_ui.tog_key[g_ui.n_tog], sizeof(g_ui.tog_key[0]), "%s", key);
         g_ui.n_tog++;
     }
+}
+
+/* one accent button, styled like action_row's (action_row hardcodes its
+   label into a row of its own, and these live in rows with other things) */
+static lv_obj_t * key_button(lv_obj_t * r, int x, const char * text,
+                             lv_event_cb_t cb)
+{
+    lv_obj_t * b = lv_button_create(r);
+    lv_obj_set_pos(b, x, 0);
+    lv_obj_set_size(b, 52, 17);
+    lv_obj_set_style_bg_color(b, lv_color_hex(PDA_CHAT_EDGE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(b, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(b, 0, LV_PART_MAIN);
+    lv_no_transition(b);
+    lv_obj_t * l = lv_label_create(b);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, &pda_font_mono_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(PDA_MSG_ACCENT), LV_PART_MAIN);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    return b;
+}
+
+/* the [KEY] block: the full npub on one line, the full nsec on the next,
+   spanning the row width (the value column alone would cut either of them
+   short). It exists only while s_show_key says so. */
+static void key_block(void)
+{
+    lv_obj_t * b = plain(g_ui.content, lv_pct(100), 34);
+    lv_obj_set_flex_grow(b, 0);
+    const char * pub = identity_pub_hex();
+    const char * npub = pub[0] ? identity_npub() : tr(TR_KEY_NOT_SET);
+    const char * nsec = pub[0] ? identity_nsec() : tr(TR_KEY_NOT_SET);
+    label(b, VAL_PAD, 1, 454, npub, &pda_font_mono_10, PDA_MSG_TEXT);
+    label(b, VAL_PAD, 17, 454, nsec, &pda_font_mono_10, PDA_MSG_SYS);
 }
 
 static void page_user(void)
@@ -913,6 +1010,44 @@ static void page_user(void)
     g_ui.room_ta = ta2;
     g_ui.room_btn = save_button(r2, on_save_room);
     g_ui.room_btn_lbl = lv_obj_get_child(g_ui.room_btn, 0);
+
+    /* the device's nstr key: the key underneath the name. The name stays
+       a label - it just stops being the identity */
+    lv_obj_t * rk = row(g_ui.content, tr(TR_KEY_ROW));
+    const char * pub = identity_pub_hex();
+    g_ui.key_btn_lbl = NULL;
+    if(pub[0]) {
+        label(rk, VAL_X + VAL_PAD, VAL_Y, 220, identity_npub(),
+              &pda_font_mono_10, PDA_MSG_TEXT);
+    }
+    else {
+        label(rk, VAL_X + VAL_PAD, VAL_Y, 220, tr(TR_KEY_NOT_SET),
+              &pda_font_mono_10, PDA_MSG_SYS);
+    }
+    lv_obj_t * kb = key_button(rk, VAL_X + 232, tr(TR_KEY_KEY), on_key_toggle);
+    g_ui.key_btn_lbl = lv_obj_get_child(kb, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, kb);
+
+    /* the reveal: up right after the press, gone on the next rebuild */
+    if(s_show_key) key_block();
+
+    /* [NEW] behind a two-press confirm - your old pubkey becomes a
+       stranger to everyone who Trusted it until they do again */
+    lv_obj_t * nr = row(g_ui.content, "");
+    lv_obj_t * nb = key_button(nr, VAL_X, tr(TR_KEY_NEW), on_new_click);
+    g_ui.new_btn_lbl = lv_obj_get_child(nb, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, nb);
+
+    /* [PASTE] - an nsec (bech32 or 64 hex) validated before anything is
+       saved; invalid input is an honest error and saves nothing */
+    lv_obj_t * pr = row(g_ui.content, "");
+    lv_obj_t * pta = text_field(pr, tr(TR_KEY_PASTE_HINT));
+    lv_obj_add_event_cb(pta, other_ui_on_paste, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, pta);
+    g_ui.paste_ta = pta;
+    lv_obj_t * pb = key_button(pr, VAL_X + 232, tr(TR_KEY_PASTE), on_paste_click);
+    g_ui.paste_btn_lbl = lv_obj_get_child(pb, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, pb);
 
     section(g_ui.content, "MESSAGES");
     toggle_row(g_ui.content, "Show carrier tag", "show_carrier");
@@ -946,11 +1081,23 @@ static void build_content(void)
     g_ui.n_tog = 0;
     g_ui.sec_no = 0;
     g_n_cycle = 0;
+    /* the key flash timer points at a label that is about to be deleted */
+    if(s_key_flash_timer) {
+        lv_timer_t * old = s_key_flash_timer;
+        s_key_flash_timer = NULL;
+        lv_timer_delete(old);
+    }
+    s_new_armed = false;         /* a rebuilt page starts with "NEW", not
+                                    a half-armed confirm */
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
     g_ui.mesh_canvas = NULL;
     g_ui.bit_hint = NULL;
+    g_ui.key_btn_lbl = NULL;
+    g_ui.new_btn_lbl = NULL;
+    g_ui.paste_btn_lbl = NULL;
+    g_ui.paste_ta = NULL;
 
     if(g_ui.page == PAGE_SETTINGS) page_settings(g_ui.sub);
     else if(g_ui.page == PAGE_CONNECTIONS) {
@@ -1169,6 +1316,7 @@ static void restyle_subs(void)
 static void select_page(int page)
 {
     if(page < 0 || page >= PAGE_COUNT) return;
+    s_show_key = false;          /* navigation clears the reveal */
     g_ui.page = page;
     g_ui.sub = 0;
     int n = 0;
@@ -1189,6 +1337,7 @@ static void select_page(int page)
 static void select_sub(int sub)
 {
     if(sub < 0 || sub >= g_ui.n_subs) return;
+    s_show_key = false;          /* navigation clears the reveal */
     g_ui.sub = sub;
     restyle_subs();
     build_content();
@@ -1336,12 +1485,99 @@ static void on_save_channel(lv_event_t * e)
     save_channel(g_ui.chan_ta);
 }
 
+/* ---------- the identity actions on the User page ---------- */
+
+/* [KEY]: the block appearing or vanishing *is* the feedback - it saves
+   nothing, so it gets no flash */
+static void on_key_toggle(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    s_show_key = !s_show_key;
+    build_content();
+}
+
+/* [NEW]: first press arms ("NEW" -> "SURE?"), the second regenerates.
+   On success the page rebuilds first - the nstr row showing the new key is
+   the primary feedback - and only then is the flash armed on the rebuilt
+   page's fresh label. On failure nothing changed: no rebuild, just FAILED
+   in the failure colour (identity.c wrote the SYSTEM line saying why). */
+static void on_new_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    lv_obj_t * lbl = g_ui.new_btn_lbl;
+    if(!s_new_armed) {
+        s_new_armed = true;
+        if(lbl) lv_label_set_text(lbl, tr(TR_KEY_SURE));
+        return;
+    }
+    s_new_armed = false;
+    if(identity_regenerate()) {
+        s_show_key = false;      /* whatever was revealed belongs to the
+                                    old key now */
+        build_content();
+        flash_btn(g_ui.new_btn_lbl, tr(TR_SAVED), tr(TR_KEY_NEW),
+                  PDA_CARRIER_UP);
+    }
+    else {
+        flash_btn(lbl, tr(TR_FAILED), tr(TR_KEY_NEW), PDA_CARRIER_DOWN);
+    }
+}
+
+static void do_paste(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt || !*txt) {          /* empty: nothing to import */
+        lv_textarea_set_text(ta, "");
+        return;
+    }
+    if(identity_import_nsec(txt)) {
+        lv_textarea_set_text(ta, "");
+        s_show_key = false;
+        build_content();         /* the nstr row shows the imported key */
+        flash_btn(g_ui.paste_btn_lbl, tr(TR_SAVED), tr(TR_KEY_PASTE),
+                  PDA_CARRIER_UP);
+    }
+    else {
+        /* invalid input = an honest error: no rebuild, nothing saved,
+           FAILED on the button (identity.c said why on the log) */
+        lv_textarea_set_text(ta, "");
+        flash_btn(g_ui.paste_btn_lbl, tr(TR_FAILED), tr(TR_KEY_PASTE),
+                  PDA_CARRIER_DOWN);
+    }
+}
+
+static void other_ui_on_paste(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    do_paste(lv_event_get_current_target(e));
+}
+
+static void on_paste_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    do_paste(g_ui.paste_ta);
+}
+
+/* The shell calls this when the Other tab is left (set_tab only hides the
+   panel, so the clear has to happen where it is hidden): the rule is that
+   the nsec is on screen only immediately after an explicit press, on the
+   visible User page, until anything else happens. */
+void other_ui_hide_secrets(void)
+{
+    if(!s_show_key) return;
+    s_show_key = false;
+    if(g_ui.content) build_content();
+}
+
 /* ---------- build ---------- */
 
 lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
 {
     memset(&g_ui, 0, sizeof(g_ui));
     g_ui.group = group;
+    s_show_key = false;          /* a fresh panel: nothing is revealed */
+    s_new_armed = false;
 
     lv_obj_t * root = lv_obj_create(parent);
     lv_obj_set_pos(root, 0, 0);

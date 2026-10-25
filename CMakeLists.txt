@@ -17,11 +17,30 @@ set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(third_party/lvgl)
 
+# libsecp256k1 (vendored, third_party/secp256k1): BIP-340 schnorrsig for the
+# signed chat events. Static, tests/bench/examples off, only the modules the
+# app uses (schnorrsig pulls extrakeys in for x-only keys).
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_ECDH OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_RECOVERY OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_MUSIG OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_ELLSWIFT OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_SILENTPAYMENTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_EXTRAKEYS ON CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_SCHNORRSIG ON CACHE BOOL "" FORCE)
+set(SECP256K1_VALGRIND "OFF" CACHE STRING "" FORCE)
+add_subdirectory(third_party/secp256k1)
+
 file(GLOB_RECURSE PDA_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
 
 add_executable(pda ${PDA_SOURCES})
 target_include_directories(pda PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(pda PRIVATE lvgl::lvgl Threads::Threads)
+target_link_libraries(pda PRIVATE lvgl::lvgl secp256k1 Threads::Threads)
 
 # an undeclared function is assumed to return int - which silently truncates
 # a pointer (getenv without <stdlib.h> did exactly that)

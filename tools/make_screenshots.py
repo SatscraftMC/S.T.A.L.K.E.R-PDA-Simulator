@@ -6,12 +6,23 @@ Every picture is the app's own window, cropped to the 800x480 client area
 
     python3 tools/make_screenshots.py
 """
+import atexit
+import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+
+# Isolation, before anything derives a path from it: no run of this script
+# ever writes the real ~/.config/pda/ (the identity key and contacts would
+# land there on the first run otherwise).
+RUN_TMP = tempfile.mkdtemp(prefix="make_shots_")
+atexit.register(lambda: shutil.rmtree(RUN_TMP, ignore_errors=True))
+os.environ.setdefault("PDA_PREFS", os.path.join(RUN_TMP, "prefs.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
@@ -208,10 +219,17 @@ def main():
                          "past the broken fence"),
                 ("WUMGUB", "copy that, moving out in ten")]
         for i, (who, what) in enumerate(msgs):
-            peer.sendall((json.dumps({"v": 1, "t": "msg", "id": f"shot{i}",
-                                       "from": who, "room": "SECTOR",
-                                       "text": what, "ts": int(time.time())})
-                          + "\n").encode())
+            # the unsigned event shape: the tests hold no key, and this
+            # picture wants the label from the name tag, not a legacy from
+            ts = int(time.time())
+            ser = json.dumps([0, "", ts, 1,
+                              [["room", "SECTOR"], ["name", who]], what],
+                             separators=(",", ":"), ensure_ascii=False)
+            eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+            peer.sendall((json.dumps({
+                "id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                "tags": [["room", "SECTOR"], ["name", who]], "content": what},
+                separators=(",", ":")) + "\n").encode())
             time.sleep(0.25)
         time.sleep(1.0)
 

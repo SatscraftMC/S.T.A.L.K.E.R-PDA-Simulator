@@ -21,4 +21,9 @@ void other_ui_set_state(int page, int sub);
    the System page. */
 void other_ui_status(const char * version, const char * gps);
 
+/* The shell calls this when the Other tab is left: whatever the User page
+   revealed ([KEY]) stops being on screen. set_tab only hides panels, so
+   the clear has to happen where the panel is hidden. */
+void other_ui_hide_secrets(void);
+
 #endif

@@ -15,6 +15,8 @@ Drives the real app and checks the things that are easy to break:
 Run it with the ordinary build, or point it at an ASan build with
     PDA_TEST_BUILD=/tmp/build-asan/pda python3 tools/ui_test.py
 """
+import atexit
+import hashlib
 import json
 import os
 import re
@@ -23,7 +25,16 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
+
+# Isolation, at module top *before* PREFS below is computed from it: no run
+# of this suite ever writes the real ~/.config/pda/ (the identity key and
+# contacts would land there on the first test run otherwise). A test that
+# needs a specific config overrides PDA_PREFS for its own instances.
+RUN_TMP = tempfile.mkdtemp(prefix="ui_test_")
+atexit.register(lambda: shutil.rmtree(RUN_TMP, ignore_errors=True))
+os.environ.setdefault("PDA_PREFS", os.path.join(RUN_TMP, "prefs.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
@@ -51,6 +62,31 @@ SUB_PITCH = 24
 FAIL = []
 
 APP_PID = None        # the app process the run in progress started
+
+
+# --- the shared shapes of spec-nostr-identity -------------------------------
+def unsigned_event(text, name, room="SECTOR", chan=None, ts=None):
+    """The one unsigned event shape (spec §4): pubkey "", no sig, id =
+    sha256 of the canonical serialization. Tests hold no key, so this is
+    exactly the honest CHAT_SIG_NONE path the receiver must still display."""
+    ts = int(ts if ts is not None else time.time())
+    tags = [["room", room]]
+    if chan:
+        tags.append(["chan", chan])
+    tags.append(["name", name])
+    ser = json.dumps([0, "", ts, 1, tags, text],
+                     separators=(",", ":"), ensure_ascii=False)
+    eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+    return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+            "tags": tags, "content": text}
+
+
+def name_of(msg, default=""):
+    """the display label: the name tag (the label a sender signs)"""
+    for t in msg.get("tags") or []:
+        if isinstance(t, (list, tuple)) and len(t) > 1 and t[0] == "name":
+            return t[1]
+    return default
 
 
 def note(ok, msg):
@@ -238,6 +274,32 @@ def lit_pixels(path, y0=0, y1=480):
     return n
 
 
+# the screenshot is the *frame*: 1 px of window border on the left and the
+# 32 px title bar on top (measured against a known landmark - the strip's
+# accent square - and cross-checked with _NET_FRAME_EXTENTS)
+SHOT_DX = 1
+SHOT_DY = 32
+
+
+def colour_pixels(path, x0, x1, y0, y1, rgb, tol=36):
+    """how many pixels in that box are close to rgb (client coordinates in,
+    screenshot pixels counted)"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return -1
+    im = Image.open(path).convert("RGB")
+    px = im.load()
+    want = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+    n = 0
+    for y in range(y0 + SHOT_DY, min(y1 + SHOT_DY, im.size[1])):
+        for x in range(x0 + SHOT_DX, min(x1 + SHOT_DX, im.size[0])):
+            r, g, b = px[x, y]
+            if abs(r - want[0]) <= tol and abs(g - want[1]) <= tol and                abs(b - want[2]) <= tol:
+                n += 1
+    return n
+
+
 def click(x, y):
     focus_window()
     subprocess.run([sys.executable, "/tmp/opencode/pdaclick2.py",
@@ -304,6 +366,50 @@ def press_enter():
     xtest.fake_input(d, X.KeyRelease, code)
     d.sync()
     time.sleep(0.3)
+
+
+def wait_for_log(path, pattern, timeout=12):
+    """poll the app log until the pattern shows up (the log-driven checks)"""
+    rx = re.compile(pattern)
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with open(path, errors="replace") as f:
+                data = f.read()
+        except OSError:
+            data = ""
+        if rx.search(data):
+            return data
+        time.sleep(0.3)
+    try:
+        with open(path, errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def target_pid(pid):
+    """point the window helpers at a specific instance (start() points them
+    at whatever it launched last, and these tests run several at once)"""
+    global APP_PID
+    APP_PID = pid
+
+
+def box_lit(path, x0, x1, y0, y1):
+    """bright pixels in a box of the screenshot (client coordinates in)"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return -1
+    im = Image.open(path).convert("RGB")
+    px = im.load()
+    n = 0
+    for y in range(y0 + SHOT_DY, min(y1 + SHOT_DY, im.size[1])):
+        for x in range(x0 + SHOT_DX, min(x1 + SHOT_DX, im.size[0])):
+            r, g, b = px[x, y]
+            if r + g + b > 330:
+                n += 1
+    return n
 
 
 def app_alive(p, logpath):
@@ -492,7 +598,7 @@ def test_settings_file():
     note(app_alive(p, logpath), "a broken settings file does not kill the app")
     stop(p, f)
 
-    # a name with the characters that break a JSON envelope
+    # a name with the characters that break a JSON event line
     os.makedirs(os.path.dirname(PREFS), exist_ok=True)
     with open(PREFS, "w") as f:
         f.write('name = Ro"ok\\Blue\nroom = Zone "A"\n')
@@ -599,10 +705,11 @@ def test_json_escaping():
                     m = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if m.get("t") == "msg":
+                if m.get("kind") == 1 and m.get("content"):
                     got = m
-        note(got is not None and got.get("from") == name,
-             f"the relay parsed the message from {name!r} (got {got and got.get('from')!r})")
+        note(got is not None and name_of(got) == name,
+             f"the relay parsed the message from {name!r} "
+             f"(got {got and name_of(got)!r})")
         with open(os.path.join(LOGDIR, "relay.log")) as f:
             rlog = f.read()
         note("bad line" not in rlog, "the relay did not see a broken line")
@@ -631,10 +738,8 @@ def test_many_messages():
         time.sleep(2.5)
         long_msg = "a very long message " * 40
         for i in range(220):
-            peer.sendall((json.dumps({"v": 1, "t": "msg", "id": f"m{i}",
-                                       "from": "ROOK", "room": "SECTOR",
-                                       "text": long_msg if i == 5 else f"message {i}",
-                                       "ts": int(time.time())}) + "\n").encode())
+            peer.sendall((json.dumps(unsigned_event(
+                long_msg if i == 5 else f"message {i}", "ROOK")) + "\n").encode())
         time.sleep(4.0)
         ok = app_alive(p, logpath)
         shot("many")
@@ -659,17 +764,13 @@ def test_mesh_channel():
                             "PDA_MESH_CHANNEL": "mesh"}, "chan")
     try:
         time.sleep(2.6)
-        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "c1", "from": "ROOK",
-                                  "room": "SECTOR", "chan": "other",
-                                  "text": "not for us",
-                                  "ts": int(time.time())}) + "\n").encode(),
-                    ("127.0.0.1", 2425))
+        peer.sendto((json.dumps(unsigned_event(
+            "not for us", "ROOK", chan="other")) + "\n").encode(),
+            ("127.0.0.1", 2425))
         time.sleep(1.2)
-        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "c2", "from": "ROOK",
-                                  "room": "SECTOR", "chan": "mesh",
-                                  "text": "for the mesh",
-                                  "ts": int(time.time())}) + "\n").encode(),
-                    ("127.0.0.1", 2425))
+        peer.sendto((json.dumps(unsigned_event(
+            "for the mesh", "ROOK", chan="mesh")) + "\n").encode(),
+            ("127.0.0.1", 2425))
         time.sleep(1.5)
         data = ""
         try:
@@ -999,10 +1100,9 @@ def test_mesh_map():
         peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         peer.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         peer.bind(("127.0.0.2", 2425))
-        peer.sendto((json.dumps({"v": 1, "t": "msg", "id": "m1", "from": "ROOK",
-                                 "room": "SECTOR", "text": "anyone there",
-                                 "ts": int(time.time())}) + "\n").encode(),
-                    ("127.0.0.1", 2425))
+        peer.sendto((json.dumps(unsigned_event(
+            "anyone there", "ROOK")) + "\n").encode(),
+            ("127.0.0.1", 2425))
         time.sleep(1.5)
         after = names(shot("mesh_after"))
         note(after > before + 20,
@@ -1415,6 +1515,411 @@ def test_wallet():
         stop(p, f)
 
 
+
+# ---------------------------------------------------------------------------
+# spec-nostr-identity: Trust, the badge, and the key actions
+#
+# Geometry in client coordinates, measured against a live screenshot of the
+# built app (frame offsets above; _NET_FRAME_EXTENTS agrees on the 32 px
+# top). The panel starts right under the 34 px header; the Contacts and
+# Messages frames sit at (6, 32) with 1 px border + 8 px padding, so their
+# lists start at x=15, y=75. The Other page's content column is at x=306,
+# y=PANEL_Y+38 with the same border+padding, so its rows start at 315/81 -
+# IDENTITY heading (16), then Name, Room, nstr, [NEW], [PASTE] (18 each,
+# 2 px flex gaps).
+PANEL_Y = 34
+LIST_X = 6 + 1 + 8
+LIST_Y = PANEL_Y + 32 + 1 + 8
+CONTENT_X = 306 + 1 + 8
+CONTENT_Y = PANEL_Y + 38 + 1 + 8
+
+def _row_center(top):
+    return top + 9
+
+NSTR_TOP = CONTENT_Y + 16 + 2 + 18 + 2 + 18 + 2        # after the heading
+NEW_TOP = NSTR_TOP + 18 + 2
+PASTE_TOP = NEW_TOP + 18 + 2
+
+KEY_BTN = (CONTENT_X + 382 + 26, _row_center(NSTR_TOP))    # [KEY], right col
+NEW_BTN = (CONTENT_X + 150 + 26, _row_center(NEW_TOP))     # [NEW], value col
+PASTE_FIELD = (CONTENT_X + 150 + 94, _row_center(PASTE_TOP))
+PASTE_BTN = (CONTENT_X + 382 + 26, _row_center(PASTE_TOP))
+# the [KEY] block opens right under the nstr row: two lines, x = content+5
+BLOCK_BOX = (CONTENT_X + 5, CONTENT_X + 140,
+             NEW_TOP, NEW_TOP + 34)
+
+BTN_X = LIST_X + 684               # a contact row's button column
+# TRUSTED empty + one SEEN row: heading, empty line, heading, then the row
+TRUST_BTN = (BTN_X + 38, LIST_Y + (16 + 2) * 3 + 2 + 8)
+# one trusted row: heading, then the row - the same band the empty state
+# leaves behind, so one pixel box reads both states
+REMOVE_ROW = LIST_Y + 16 + 2
+REMOVE_BTN = (BTN_X + 38, _row_center(REMOVE_ROW))
+TRUSTED_BAND = (BTN_X, BTN_X + 78, REMOVE_ROW, REMOVE_ROW + 24)
+# after a REMOVE the device drops straight back under SEEN: heading, empty,
+# heading, then the rows (most recent first)
+SEEN_ROW = LIST_Y + (16 + 2) * 3
+SEEN_BAND = (BTN_X, BTN_X + 78, SEEN_ROW, SEEN_ROW + 46)
+# the second SEEN row's [TRUST] (row pitch = 22 + 2): used to trust again
+# after a REMOVE - the impostor spoke last, so it is the row above
+SEEN_TRUST2_BTN = (BTN_X + 38, SEEN_ROW + 22 + 2 + 10)
+# the badge sits in the name column of a message row (row x + 44)
+BADGE_X = (LIST_X + 40, LIST_X + 57)
+# rows are newest-first and about 20 px tall: the impostor's row is first
+# when it is the newest message
+ROW0_BAND = (LIST_Y, LIST_Y + 22)
+ROW_REST_BAND = (LIST_Y + 22, LIST_Y + 140)
+
+
+def _read(path):
+    try:
+        with open(path, errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _pubs(logpath):
+    return re.findall(r"\[id\] pub=([0-9a-f]{64})", _read(logpath))
+
+
+def test_trust():
+    print("16. Trust, the verified badge, and a name spoof", flush=True)
+    # Three instances: S is the key we Trust, I is an impostor using the
+    # same display name (its name tag is identical, its key is not), D is
+    # the device under test - all on default carrier ports, which is how
+    # they hear each other on one box.
+    d = os.path.join(RUN_TMP, "trust_dev")
+    sd = os.path.join(RUN_TMP, "trust_s")
+    idd = os.path.join(RUN_TMP, "trust_i")
+    for x in (d, sd, idd):
+        os.makedirs(x, exist_ok=True)
+    prefs = os.path.join(d, "prefs.conf")
+    quiet = {"PDA_BIT_SCAN": "off", "PDA_NET_SCAN": "off", "PDA_DEBUG": "1"}
+
+    s1, s1f, s1log = start({
+        "PDA_PREFS": os.path.join(sd, "prefs.conf"),
+        "PDA_NAME": "ROOK", "PDA_START_TAB": "1",
+        "PDA_TEST_SEND": "rook was here", "PDA_TEST_SEND_IN": "2",
+        **quiet}, "trust_s1")
+    time.sleep(1.0)
+    dev, devf, devlog = start({
+        "PDA_PREFS": prefs, "PDA_START_TAB": "2", **quiet}, "trust_dev")
+    try:
+        wait_for_log(s1log, r"\[id\] pub=", 10)
+        pub_s = _pubs(s1log)[-1]
+        data = wait_for_log(devlog, re.escape("sig ok pub=" + pub_s), 15)
+        note(pub_s and ("sig ok pub=" + pub_s) in data,
+             "the device verified the sender's signature")
+        note("recv via" in data and "rook was here" in data,
+             "the sender's message is in the device's log")
+        time.sleep(1.5)
+
+        click_once(*TRUST_BTN)
+        time.sleep(1.5)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s in contacts, "TRUST wrote the key into contacts.conf")
+
+        # the badge on the already-drawn row (the staleness rule: a
+        # contacts_version change repaints the Messages list)
+        click_once(120 + 1 * 80, 22)          # the Messages tab
+        time.sleep(1.2)
+        g = colour_pixels(shot("trust_badge"), BADGE_X[0], BADGE_X[1],
+                          LIST_Y, LIST_Y + 140, 0x7C9E52)
+        note(g >= 10, f"the trusted row shows the verified mark ({g} green px)")
+
+        # the impostor: same name, different key
+        imp, impf, implog = start({
+            "PDA_PREFS": os.path.join(idd, "prefs.conf"),
+            "PDA_NAME": "ROOK", "PDA_START_TAB": "1",
+            "PDA_TEST_SEND": "i am rook too", "PDA_TEST_SEND_IN": "2",
+            **quiet}, "trust_imp")
+        wait_for_log(devlog, r"i am rook too", 15)
+        pub_i = _pubs(implog)[-1] if _pubs(implog) else ""
+        note(pub_i and pub_i != pub_s, "the impostor has its own key")
+        target_pid(dev.pid)                  # start() points at the impostor
+        time.sleep(1.5)
+        shot_path = shot("trust_spoof")
+        top = colour_pixels(shot_path, BADGE_X[0], BADGE_X[1],
+                            ROW0_BAND[0], ROW0_BAND[1], 0x7C9E52)
+        rest = colour_pixels(shot_path, BADGE_X[0], BADGE_X[1],
+                             ROW_REST_BAND[0], ROW_REST_BAND[1], 0x7C9E52)
+        note(top <= 5, f"the impostor's row (same name) has no mark ({top} px)")
+        note(rest >= 10, f"the trusted row below it still does ({rest} px)")
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s in contacts and pub_i not in contacts,
+             "only the key that was Trusted is in contacts.conf")
+
+        # --- REMOVE, in the same session: out of the file, and straight
+        #     back under SEEN (a session speaker is never purged). Back to
+        #     the Contacts tab first - the badge check left us on Messages,
+        #     and a click at row coordinates on the wrong tab is how this
+        #     test tricked itself into "REMOVEd but still in the file".
+        click_once(120 + 2 * 80, 22)          # the Contacts tab
+        time.sleep(1.2)
+        click_once(*REMOVE_BTN)
+        time.sleep(1.5)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s not in contacts, "REMOVE took the key out of contacts.conf")
+        shot_path = shot("trust_removed")
+        amber = colour_pixels(shot_path, *TRUSTED_BAND, 0xC9A227)
+        note(amber <= 5, f"the TRUSTED section is empty again ({amber} px)")
+        seen = colour_pixels(shot_path, *SEEN_BAND, 0xC9A227)
+        note(seen >= 20, f"the device is back under SEEN, not purged "
+                         f"({seen} amber px)")
+
+        # --- and TRUST again (the sender's row: it spoke before the
+        #     impostor, so it is the second SEEN row) so the next step can
+        #     restart with a trust in place
+        click_once(*SEEN_TRUST2_BTN)
+        time.sleep(1.5)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s in contacts, "TRUST works a second time on the same key")
+
+        stop(imp, impf)
+        stop(dev, devf)
+        stop(s1, s1f)
+
+        # --- persistence: restart, the key is still there, key file intact
+        nsec_before = _read(os.path.join(d, "identity.nsec"))
+        dev, devf, devlog = start({
+            "PDA_PREFS": prefs, "PDA_START_TAB": "2", **quiet}, "trust_dev2")
+        time.sleep(3.0)
+        target_pid(dev.pid)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s in contacts, "the contact is still in contacts.conf")
+        amber = colour_pixels(shot("trust_restart"), *TRUSTED_BAND, 0xC9A227)
+        note(amber >= 20, f"the TRUSTED section still shows its row + REMOVE "
+                          f"({amber} amber px)")
+        note(_read(os.path.join(d, "identity.nsec")) == nsec_before,
+             "identity.nsec survived the restart unchanged")
+
+        # --- REMOVE on the restarted instance (its session list is empty
+        #     by design - speakers are session-only - so SEEN shows its
+        #     honest empty state, and only TRUSTED is checked here)
+        click_once(*REMOVE_BTN)
+        time.sleep(1.5)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s not in contacts, "REMOVE took the key out of contacts.conf")
+        shot_path = shot("trust_removed")
+        amber = colour_pixels(shot_path, *TRUSTED_BAND, 0xC9A227)
+        note(amber <= 5, f"the TRUSTED section is empty again ({amber} px)")
+        stop(dev, devf)
+
+        # --- and it stays gone after another restart
+        dev, devf, devlog = start({
+            "PDA_PREFS": prefs, "PDA_START_TAB": "2", **quiet}, "trust_dev3")
+        time.sleep(3.0)
+        contacts = _read(os.path.join(d, "contacts.conf"))
+        note(pub_s not in contacts, "the contact is gone after a restart too")
+        note(_read(os.path.join(d, "identity.nsec")) == nsec_before,
+             "identity.nsec is still the same key")
+        ok = app_alive(dev, devlog)
+        stop(dev, devf)
+        note(ok, "the device is alive through all of it")
+    finally:
+        for proc, fh in ((s1, s1f), (dev, devf)):
+            try:
+                stop(proc, fh)
+            except Exception:
+                pass
+
+
+def test_key_actions():
+    print("17. the nstr key: [KEY], [NEW], [PASTE], an unreadable file", flush=True)
+    d = os.path.join(RUN_TMP, "keys")
+    os.makedirs(d, exist_ok=True)
+    prefs = os.path.join(d, "prefs.conf")
+    keyfile = os.path.join(d, "identity.nsec")
+
+    def boot(tag):
+        return start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0",
+                      "PDA_OTHER_SUB": "5", "PDA_DEBUG": "1",
+                      "PDA_PREFS": prefs}, tag)
+
+    # --- first run: a key is generated, and [KEY] reveals it only on demand
+    p, f, logpath = boot("key1")
+    time.sleep(3.0)
+    try:
+        pub0 = _pubs(logpath)[-1] if _pubs(logpath) else ""
+        note(bool(pub0), "the first run generated a key")
+        nsec0 = _read(keyfile).strip()
+
+        # the reveal: closed -> open -> closed, and navigation clears it
+        before = box_lit(shot("key_closed"), *BLOCK_BOX)
+        click_once(*KEY_BTN)
+        time.sleep(1.0)
+        opened = box_lit(shot("key_open"), *BLOCK_BOX)
+        note(opened >= before + 20,
+             f"[KEY] reveals the npub + nsec block ({before} -> {opened} px)")
+        click_once(*KEY_BTN)
+        time.sleep(1.0)
+        closed = box_lit(shot("key_closed2"), *BLOCK_BOX)
+        note(closed <= opened - 15, f"a second press hides it ({closed} px)")
+        # leaving the page and coming back must not bring it back
+        click_once(*KEY_BTN)
+        time.sleep(0.8)
+        click_once(SUB_X, SUB_Y0 + SUB_PITCH * 2)      # Language
+        time.sleep(1.0)
+        click_once(SUB_X, SUB_Y0 + SUB_PITCH * 5)      # back to User
+        time.sleep(1.0)
+        after_nav = box_lit(shot("key_after_nav"), *BLOCK_BOX)
+        note(after_nav <= closed + 5,
+             f"navigation cleared the reveal ({after_nav} px)")
+
+        # --- [NEW]: two presses (arm, then confirm)
+        click_once(*NEW_BTN)          # "NEW" -> "SURE?"
+        time.sleep(0.5)
+        click_once(*NEW_BTN)          # regenerate
+        pub1 = []
+        end = time.time() + 8
+        while time.time() < end:
+            pub1 = _pubs(logpath)
+            if len(pub1) >= 2 and pub1[-1] != pub1[0]:
+                break
+            time.sleep(0.4)
+        note(len(pub1) >= 2 and pub1[-1] != pub1[0],
+             "two presses on [NEW] regenerated the key")
+        nsec1 = _read(keyfile).strip()
+        note(nsec1 and nsec1 != nsec0, "identity.nsec was rewritten")
+    finally:
+        stop(p, f)
+
+    # --- the new key survives a restart
+    p, f, logpath = boot("key2")
+    time.sleep(3.0)
+    try:
+        pubs = _pubs(logpath)
+        note(pubs and pubs[-1] == pub1[-1],
+             "the regenerated key is the one that comes back after a restart")
+        note(_read(keyfile).strip() == nsec1,
+             "identity.nsec is unchanged by that restart")
+    finally:
+        stop(p, f)
+
+    # --- [PASTE] with a key generated at runtime (never a committed one)
+    import secrets
+    hexkey = secrets.token_hex(32)
+    p, f, logpath = boot("key3")
+    time.sleep(3.0)
+    try:
+        before = _pubs(logpath)[-1]
+        click_once(*PASTE_FIELD)
+        time.sleep(0.4)
+        type_text(hexkey)
+        time.sleep(0.5)
+        shot("key_pasted")
+        click_once(*PASTE_BTN)
+        after = []
+        end = time.time() + 8
+        while time.time() < end:
+            after = _pubs(logpath)
+            if len(after) >= 2 and after[-1] != before:
+                break
+            time.sleep(0.4)
+        note(len(after) >= 2 and after[-1] != before,
+             "the pasted runtime key became the device key")
+        nsec2 = _read(keyfile).strip()
+        note(nsec2 and nsec2 != nsec1, "identity.nsec now holds the pasted key")
+
+        # a paste that is not a key: nothing saved, no new key
+        click_once(*PASTE_FIELD)
+        time.sleep(0.4)
+        type_text("definitelynotakey")
+        time.sleep(0.5)
+        click_once(*PASTE_BTN)
+        time.sleep(2.0)
+        note(len(_pubs(logpath)) == len(after),
+             "an invalid paste imports nothing (no new key line)")
+        note(_read(keyfile).strip() == nsec2, "an invalid paste saves nothing")
+    finally:
+        stop(p, f)
+
+    # --- the runtime key also survives a restart (the npub matches)
+    p, f, logpath = boot("key4")
+    time.sleep(3.0)
+    try:
+        note(_pubs(logpath)[-1] == after[-1],
+             "the imported key is the one that comes back after a restart")
+        note(app_alive(p, logpath), "the app is alive on a normal boot")
+    finally:
+        stop(p, f)
+
+    # --- an unreadable identity.nsec: honest failure, never a rewrite
+    with open(keyfile, "w") as fh:
+        fh.write("this is not a key at all\n")
+    p, f, logpath = boot("key5")
+    time.sleep(3.0)
+    try:
+        data = _read(logpath)
+        note(app_alive(p, logpath), "a corrupt identity.nsec does not kill the app")
+        note("[id] pub=" not in data,
+             "the corrupt file is not silently regenerated (no key line)")
+        note("[id] selftest" in data,
+             "the sha256 selftest still logs (hashing needs no key)")
+        note("system:" in data and "not a valid key" in data,
+             "the honest SYSTEM line made it into the log")
+        note(_read(keyfile).strip() == "this is not a key at all",
+             "the corrupt file was left on disk, untouched")
+        # the User page says "not set" instead of a key
+        n = lit_pixels(shot("key_notset"), PANEL_Y + 40, PANEL_Y + 240)
+        note(n > 0, f"the User page still renders ({n} px)")
+    finally:
+        stop(p, f)
+
+
+def test_docs():
+    print("18. i18n parity and the doc claims this build touched", flush=True)
+    # every TR_ id in the enum has an EN and a PL entry
+    h = _read(os.path.join(ROOT, "src", "ui", "i18n.h"))
+    body = re.search(r"typedef enum \{(.*?)\} tr_id_t;", h, re.S)
+    ids = set(re.findall(r"\b(TR_[A-Z0-9_]+)\b",
+                         body.group(1) if body else "")) - {"TR_COUNT"}
+    c = _read(os.path.join(ROOT, "src", "ui", "i18n.c"))
+    en = set(re.findall(r"\[(TR_[A-Z0-9_]+)\]",
+                        re.search(r"s_en\[TR_COUNT\] = \{(.*?)\n\};", c, re.S)
+                        .group(1)))
+    pl = set(re.findall(r"\[(TR_[A-Z0-9_]+)\]",
+                        re.search(r"s_pl\[TR_COUNT\] = \{(.*?)\n\};", c, re.S)
+                        .group(1)))
+    note(ids == en == pl,
+         f"every TR_ id has an EN and a PL entry ({len(ids)} keys, "
+         f"missing EN: {sorted(ids - en)}, missing PL: {sorted(ids - pl)})")
+
+    # the claims this build invalidates (spec-nostr-identity §11)
+    docs = [os.path.join(ROOT, "README.md")]
+    plan_docs = os.path.join(os.path.dirname(ROOT), "pda-plan-docs")
+    for name in ("STATUS.md", "planning.md", "build-approach.md",
+                 "wallet_build_plan.md"):
+        docs.append(os.path.join(plan_docs, name))
+    stale = []
+    for path in docs:
+        text = _read(path)
+        if "74 keys" in text:
+            stale.append(f"{os.path.basename(path)}: old key count")
+        if "live peers + saved contacts, persisted" in text:
+            stale.append(f"{os.path.basename(path)}: old Contacts TODO")
+    note(not stale, "the key counts and the Contacts TODO are updated "
+                    f"({stale or 'nothing stale'})")
+
+    readme = _read(docs[0])
+    note("Contacts and Camera are visible stub tabs" not in readme,
+         "the README no longer calls Contacts a stub tab")
+
+    src = ""
+    for dirpath, _, files in os.walk(os.path.join(ROOT, "src")):
+        for name in files:
+            if name.endswith((".c", ".h")):
+                src += _read(os.path.join(dirpath, name))
+    note("No contacts yet." not in src,
+         "the dead stub string left the source")
+
+    # no key material in the repo's source (the wallet audit's rule)
+    note(not re.search(r'"nsec1', src) and
+         not re.search(r'"[0-9a-f]{64}"', src),
+         "no nsec literal and no 64-hex constant in src/")
+
+
 TESTS = {
     "tabs": test_tabs,
     "pages": test_other_pages,
@@ -1431,6 +1936,9 @@ TESTS = {
     "waypoints": test_waypoints,
     "mesh": test_mesh_map,
     "wallet": test_wallet,
+    "trust": test_trust,
+    "keys": test_key_actions,
+    "docs": test_docs,
 }
 
 def main():

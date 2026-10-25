@@ -92,12 +92,23 @@ s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 # an ephemeral port: the peer of this script holds the mesh port already.
 # The envelope says which port the device listens on - that is what the
 # mesh uses to talk to it.
-s.sendto((json.dumps({"v":1,"t":"msg","id":str(int(time.time()*1000)),"from":"LAPTOP",
-                       "room":"SECTOR","port":2425,"text":"hello from the other house",
-                       "ts":int(time.time())})).encode(), (sys.argv[2], 2425))
+# the unsigned event shape: no key here, so pubkey "" and no sig - the
+# name tag carries what the legacy "from" field used to
+import hashlib
+ts = int(time.time())
+text = "hello from the other house"
+tags = [["room", "SECTOR"], ["name", "LAPTOP"]]
+ser = json.dumps([0, "", ts, 1, tags, text], separators=(",", ":"), ensure_ascii=False)
+eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+s.sendto((json.dumps({"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                      "tags": tags, "content": text}) +
+          "").encode(), (sys.argv[2], 2425))
 PY
 
 rm -f "$WORK/ns_peer.log" "$WORK/ns_app.log"
+# isolation: no run writes the real ~/.config/pda/ (the key and contacts
+# would land there on the first run otherwise)
+export PDA_PREFS="${PDA_PREFS:-$WORK/prefs.conf}"
 export DISPLAY="${DISPLAY:-:0}" PDA_DEBUG=1 PDA_NAME=PC \
        PDA_TEST_SEND="hello from the PDA" PDA_TEST_SEND_IN=15
 "$APP" > "$WORK/ns_app.log" 2>&1 &

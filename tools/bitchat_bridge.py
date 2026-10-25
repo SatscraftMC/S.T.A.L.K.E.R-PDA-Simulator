@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Bridge between the PDA's BIT carrier and a real bitchat node.
 
-The PDA app speaks one JSON envelope per line. This bridge translates that
-envelope into real bitchat traffic and back, using the `bitchat` python
+The PDA app speaks one JSON event per line (a signed NIP-01 event for chat,
+unsigned legacy lines for discovery). This bridge translates that line into
+real bitchat traffic and back, using the `bitchat` python
 package (pip install bitchat) - so a PDA and a phone running the real bitchat
 app can hold the same conversation over the BLE mesh.
 
@@ -17,11 +18,12 @@ still speaks the protocol, so the app's BIT path can be exercised end to end;
 it just has no mesh behind it. The status line says which of the two it is.
 
 The mesh side is a plain channel: every message goes out on the channel it
-carries ("chan" in the envelope, which is the channel the PDA is set to -
+carries ("chan" in the event tags, which is the channel the PDA is set to -
 "mesh" by default), which is what the real bitchat app calls a public
 channel. --channel is the fallback for messages that come without one.
 """
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -29,6 +31,25 @@ import sys
 import threading
 import time
 import uuid
+
+def tag_of(msg, name, default=""):
+    for t in msg.get("tags") or []:
+        if isinstance(t, (list, tuple)) and len(t) > 1 and t[0] == name:
+            return t[1]
+    return default
+
+
+def unsigned_event(content, tags, created_at=None):
+    """the unsigned event shape (pubkey "", no sig): the bridge holds no
+    key, so what it builds is exactly what the app's identity-failure
+    sends look like - the honest CHAT_SIG_NONE path on the receiver."""
+    ts = int(created_at if created_at is not None else time.time())
+    ser = json.dumps([0, "", ts, 1, tags, content],
+                     separators=(",", ":"), ensure_ascii=False)
+    eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+    return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+            "tags": tags, "content": content}
+
 
 try:
     import bitchat as bitchat_pkg
@@ -100,13 +121,17 @@ class Bridge:
             msg = json.loads(line)
         except json.JSONDecodeError:
             return
-        if msg.get("t") != "msg":
+        # a line with a t key is discovery, not chat (the carriers own that
+        # dispatch); an event carries what it says in content, and its
+        # channel in the chan tag
+        if "t" in msg:
             return
-        text = msg.get("text", "")
+        if msg.get("kind") != 1:
+            return
+        text = msg.get("content", "")
         if not text:
             return
-        # the channel the PDA is set to decides where it goes
-        chan = msg.get("chan") or self.channel
+        chan = tag_of(msg, "chan") or self.channel
         self.log("app ->", chan, text)
         self.to_mesh(msg, text, chan)
 
@@ -132,7 +157,7 @@ class Bridge:
         try:
             m = bitchat_pkg.BitchatMessage(
                 id=msg.get("id", uuid.uuid4().hex[:8]),
-                sender=msg.get("from", "PDA"),
+                sender=tag_of(msg, "name") or "PDA",
                 content=text,
                 timestamp=time.time(),
                 is_relay=False,
@@ -171,11 +196,14 @@ class Bridge:
                 if msg is None or not msg.content:
                     continue
                 self.log("mesh ->", msg.sender, msg.content)
-                self.to_app({
-                    "v": 1, "t": "msg", "id": msg.id,
-                    "from": msg.sender, "room": self.channel.upper(),
-                    "text": msg.content, "ts": int(time.time()),
-                })
+                # into the app as an unsigned event: the tags are what the
+                # legacy fields were - name from the sender, room from the
+                # channel, no chan tag (a missing chan passes the app's
+                # filter, so behavior is unchanged). No signature: real
+                # bitchat's own sender identity is out of slice A's scope.
+                self.to_app(unsigned_event(
+                    msg.content,
+                    [["name", msg.sender], ["room", (self.channel or "").upper()]]))
             except Exception as e:                  # noqa: BLE001
                 self.mesh_note = f"mesh down: {e}"
                 self.log("mesh receive failed:", e)

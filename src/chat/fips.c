@@ -25,7 +25,7 @@
  *   - `listen` gives back a listener; an arriving flow is one SOCK_SEQPACKET
  *     message on it, and `connect` gives back a flow to a peer.
  *   - a flow carries datagrams with no framing at all: one send is one
- *     datagram, and the same JSON envelope the other carriers use.
+ *     datagram, and the same signed NIP-01 event line the other carriers use.
  *
  * Everything here happens on a thread of its own: a setup call is a blocking
  * round trip to the daemon, and the LVGL loop must never wait for one.
@@ -50,13 +50,11 @@ typedef struct {
 } fips_flow_t;
 
 typedef struct {
-    char from[64];
-    char text[CHAT_TEXT_MAX];
+    char line[2048];         /* the raw event line, handed over as it came */
 } fips_in_t;
 
 typedef struct {
-    char id[CHAT_ID_MAX];
-    char text[CHAT_TEXT_MAX];
+    char line[2048];         /* one already-built event, preformatted */
 } fips_out_t;
 
 typedef struct {
@@ -302,13 +300,12 @@ static int extract_peers(const char * reply, char out[][96], int max)
 
 /* ---------- the worker thread ---------- */
 
-static void push_inbox(const char * from, const char * text)
+static void push_inbox(const char * line)
 {
     pthread_mutex_lock(&s_fips.lock);
     if(s_fips.in_count < FIPS_INBOX) {
         int idx = (s_fips.in_head + s_fips.in_count) % FIPS_INBOX;
-        snprintf(s_fips.inbox[idx].from, sizeof(s_fips.inbox[idx].from), "%s", from);
-        snprintf(s_fips.inbox[idx].text, sizeof(s_fips.inbox[idx].text), "%s", text);
+        snprintf(s_fips.inbox[idx].line, sizeof(s_fips.inbox[idx].line), "%s", line);
         s_fips.in_count++;
     }
     pthread_mutex_unlock(&s_fips.lock);
@@ -406,14 +403,21 @@ static void read_flow(int idx)
         buf[n] = 0;
         if(msg.msg_flags & MSG_TRUNC) continue;    /* payload too long: drop it */
 
-        char type[24] = "", from[64] = "", text[CHAT_TEXT_MAX] = "", id[CHAT_ID_MAX] = "";
+        char type[24] = "";
         json_get(buf, "t", type, sizeof(type));
-        if(strcmp(type, "msg") != 0) continue;
-        json_get(buf, "from", from, sizeof(from));
-        json_get(buf, "text", text, sizeof(text));
-        json_get(buf, "id", id, sizeof(id));
-        if(!text[0]) continue;
-        push_inbox(from, text);
+        if(type[0]) {
+            /* the old chat envelope, dropped where it arrives (the FIPS
+               path reads no chan, so it never filtered and still does not) */
+            if(strcmp(type, "msg") == 0 && getenv("PDA_DEBUG"))
+                fprintf(stderr, "[chat] legacy line dropped\n");
+            continue;
+        }
+        char kind[24] = "";
+        if(!json_get(buf, "kind", kind, sizeof(kind))) {
+            if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] legacy line dropped\n");
+            continue;
+        }
+        push_inbox(buf);            /* the whole line: chat parses it once */
     }
 }
 
@@ -475,8 +479,7 @@ static void flush_outbox(void)
         s_fips.out_count--;
         pthread_mutex_unlock(&s_fips.lock);
 
-        char env[1024];
-        chat_envelope(env, sizeof(env), out.id, chat_identity(), out.text, (long)time(NULL));
+        const char * env = out.line;      /* built once, shipped as it is */
 
         pthread_mutex_lock(&s_fips.lock);
         for(int i = 0; i < FIPS_MAX_FLOWS; i++) {
@@ -626,20 +629,21 @@ static int fips_poll(chat_transport_t * t)
         s_fips.in_count--;
         pthread_mutex_unlock(&s_fips.lock);
 
-        chat_deliver(chat_transport_index(t), "", in.from, in.text);
+        chat_deliver_line(chat_transport_index(t), in.line);
         got++;
     }
     return got;
 }
 
-static bool fips_send(chat_transport_t * t, const char * text, const char * id)
+static bool fips_send(chat_transport_t * t, const char * event, const char * id)
 {
     (void)t;
+    (void)id;                     /* the id is the event's, already built */
     pthread_mutex_lock(&s_fips.lock);
     if(s_fips.out_count < FIPS_OUTBOX) {
         int idx = (s_fips.out_head + s_fips.out_count) % FIPS_OUTBOX;
-        snprintf(s_fips.outbox[idx].id, sizeof(s_fips.outbox[idx].id), "%s", id ? id : "");
-        snprintf(s_fips.outbox[idx].text, sizeof(s_fips.outbox[idx].text), "%s", text);
+        snprintf(s_fips.outbox[idx].line, sizeof(s_fips.outbox[idx].line),
+                 "%s", event);
         s_fips.out_count++;
     }
     pthread_mutex_unlock(&s_fips.lock);

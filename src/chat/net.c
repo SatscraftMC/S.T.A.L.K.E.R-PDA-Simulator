@@ -377,9 +377,16 @@ static bool relay_connect(net_t * n)
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     n->relay_fd = fd;
 
-    /* announce ourselves, so the relay knows who is in the room */
+    /* announce ourselves, so the relay knows who is in the room. It is
+       unsigned discovery - it carries no speech and grants no trust, so it
+       stays a plain legacy line (the old t:"msg" hello with empty text
+       that nothing ever displayed is gone) */
     char hello[256];
-    chat_envelope(hello, sizeof(hello), "hello", chat_identity(), "", (long)time(NULL));
+    char e_from[CHAT_NAME_MAX * 6];
+    json_escape(chat_identity(), e_from, sizeof(e_from));
+    snprintf(hello, sizeof(hello),
+             "{\"v\":1,\"t\":\"hello\",\"from\":\"%s\",\"ts\":%ld}",
+             e_from, (long)time(NULL));
     {
         ls_t tmp;
         ls_init(&tmp);
@@ -416,14 +423,21 @@ static void relay_poll(net_t * n)
         }
         char type[24] = "";
         json_get(line, "t", type, sizeof(type));
-        if(strcmp(type, "msg") != 0) continue;
-
-        char id[CHAT_ID_MAX] = "", from[CHAT_NAME_MAX] = "", text[CHAT_TEXT_MAX] = "";
-        json_get(line, "id", id, sizeof(id));
-        json_get(line, "from", from, sizeof(from));
-        json_get(line, "text", text, sizeof(text));
-        if(!text[0]) continue;
-        chat_deliver(chat_transport_index(&s_tr), id, from, text);
+        if(type[0]) {
+            /* discovery on the uplink, as always (the relay's hello from
+               another device) - and the old chat envelope dropped here */
+            if(strcmp(type, "msg") == 0 && getenv("PDA_DEBUG"))
+                fprintf(stderr, "[chat] legacy line dropped\n");
+            continue;
+        }
+        char kind[24] = "";
+        if(!json_get(line, "kind", kind, sizeof(kind))) {
+            if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] legacy line dropped\n");
+            continue;
+        }
+        /* the relay path has no channel filter and stays unfiltered: relay
+           traffic is not upgraded into filtered traffic by this build */
+        chat_deliver_line(chat_transport_index(&s_tr), line);
     }
 }
 
@@ -444,20 +458,28 @@ static bool relay_send(net_t * n, const char * env)
 
 static void deliver_line(const char * line)
 {
+    /* the dispatch rule, owned by the carriers (see bit.c): a line with a
+       t key stays here, an event goes to the one parse+verify point */
     char type[24] = "";
     json_get(line, "t", type, sizeof(type));
-    if(strcmp(type, "msg") != 0) return;
+    if(type[0]) {
+        if(strcmp(type, "msg") == 0 && getenv("PDA_DEBUG"))
+            fprintf(stderr, "[chat] legacy line dropped\n");
+        return;
+    }
+    char kind[24] = "";
+    if(!json_get(line, "kind", kind, sizeof(kind))) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] legacy line dropped\n");
+        return;
+    }
 
-    char id[CHAT_ID_MAX] = "", from[CHAT_NAME_MAX] = "", text[CHAT_TEXT_MAX] = "";
+    /* the net carries one channel: what is said elsewhere is not for us
+       (only when a chan tag is present and differs) */
     char chan[CHAT_ROOM_MAX] = "";
-    json_get(line, "id", id, sizeof(id));
-    json_get(line, "from", from, sizeof(from));
-    json_get(line, "text", text, sizeof(text));
-    json_get(line, "chan", chan, sizeof(chan));
-    if(!text[0]) return;
-    /* the net carries one channel: what is said elsewhere is not for us */
+    json_tag(line, "chan", chan, sizeof(chan));
     if(chan[0] && strcmp(chan, chat_mesh_channel()) != 0) return;
-    chat_deliver(chat_transport_index(&s_tr), id, from, text);
+
+    chat_deliver_line(chat_transport_index(&s_tr), line);
 }
 
 /* a "hi" from a device on the local network: it is how a peer is found.
@@ -580,11 +602,13 @@ static int net_poll(chat_transport_t * t)
             continue;
         }
 
-        /* the device that sent it is a node of the mesh */
+        /* the device that sent it is a node of the mesh. Its name: the
+           name tag when the line is an event, else the legacy from field */
         char addr[40] = "";
         inet_ntop(AF_INET, &from.sin_addr, addr, sizeof(addr));
         char who[CHAT_NAME_MAX] = "";
-        json_get(buf, "from", who, sizeof(who));
+        json_tag(buf, "name", who, sizeof(who));
+        if(!who[0]) json_get(buf, "from", who, sizeof(who));
         /* our own broadcast comes back to us: we are not a peer of
            ourselves */
         if(!is_local(n, &from.sin_addr)) chat_note_peer(addr, ntohs(from.sin_port), who);
@@ -620,11 +644,11 @@ static int net_poll(chat_transport_t * t)
     return got;
 }
 
-static bool net_send(chat_transport_t * t, const char * text, const char * id)
+static bool net_send(chat_transport_t * t, const char * event, const char * id)
 {
+    (void)id;                     /* the id is the event's, already built */
     net_t * n = (net_t *)t->priv;
-    char env[1024];
-    chat_envelope(env, sizeof(env), id, chat_identity(), text, (long)time(NULL));
+    const char * env = event;
 
     /* the broadcast: whoever is in earshot hears it */
     for(int i = 0; i < n->n_bcast; i++) {

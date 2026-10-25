@@ -44,15 +44,46 @@ static const char * read_string(const char * p, char * out, size_t outn)
                     if(!ok) { cp = '?'; }
                     else {
                         p += 4;
+                        /* a surrogate pair is one character: the python
+                           relay re-dumps lines with ensure_ascii=True, which
+                           turns non-BMP characters into \uD83D\uDE00 - without
+                           the combining, a signed message with an emoji would
+                           re-serialize differently at the receiver and fail
+                           the id recheck on an honest message */
+                        if(cp >= 0xd800 && cp <= 0xdbff && p[1] == '\\' && p[2] == 'u') {
+                            unsigned lo = 0;
+                            int ok2 = 1;
+                            for(int i = 3; i <= 6; i++) {
+                                char h = p[i];
+                                lo <<= 4;
+                                if(h >= '0' && h <= '9') lo |= (unsigned)(h - '0');
+                                else if(h >= 'a' && h <= 'f') lo |= (unsigned)(h - 'a' + 10);
+                                else if(h >= 'A' && h <= 'F') lo |= (unsigned)(h - 'A' + 10);
+                                else { ok2 = 0; break; }
+                            }
+                            if(ok2 && lo >= 0xdc00 && lo <= 0xdfff) {
+                                cp = 0x10000u + ((cp - 0xd800u) << 10) + (lo - 0xdc00u);
+                                p += 6;
+                            }
+                        }
                         if(cp < 0x80) c = (char)cp;
                         else if(cp < 0x800) {
                             if(o + 1 < outn) out[o++] = (char)(0xC0 | (cp >> 6));
                             if(o + 1 < outn) out[o++] = (char)(0x80 | (cp & 0x3F));
                             c = 0;
                         }
-                        else {
+                        else if(cp < 0x10000) {
                             if(o + 2 < outn) {
                                 out[o++] = (char)(0xE0 | (cp >> 12));
+                                out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                                out[o++] = (char)(0x80 | (cp & 0x3F));
+                            }
+                            c = 0;
+                        }
+                        else {
+                            if(o + 3 < outn) {
+                                out[o++] = (char)(0xF0 | (cp >> 18));
+                                out[o++] = (char)(0x80 | ((cp >> 12) & 0x3F));
                                 out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
                                 out[o++] = (char)(0x80 | (cp & 0x3F));
                             }
@@ -161,12 +192,19 @@ size_t json_escape(const char * in, char * out, size_t outn)
 {
     size_t o = 0;
     if(!out || outn == 0) return 0;
+    /* byte by byte as *unsigned*: on this signed-char dev box a byte >=0x80
+       read into a `char` is negative, and the `c < 0x20` test would mangle
+       every UTF-8 byte into a bogus \uXXXX (on ARM, where char is unsigned,
+       it would not - the output would be platform-dependent). Bytes >=0x80
+       pass through raw: valid UTF-8 in JSON, and closer to NIP-01's
+       verbatim-UTF-8 rule. Without this a non-ASCII name or message
+       re-serializes differently at the verifier and fails the id recheck. */
     for(const unsigned char * p = (const unsigned char *)(in ? in : ""); *p; p++) {
-        char c = (char)*p;
+        unsigned char c = *p;
         if(c == '"' || c == '\\') {
             if(o + 2 >= outn) break;
             out[o++] = '\\';
-            out[o++] = c;
+            out[o++] = (char)c;
         }
         else if(c == '\n') {
             if(o + 2 >= outn) break;
@@ -184,14 +222,141 @@ size_t json_escape(const char * in, char * out, size_t outn)
             out[o++] = 't';
         }
         else if(c < 0x20) {
-            if(o + 4 >= outn) break;
+            if(o + 6 >= outn) break;
             o += (size_t)snprintf(out + o, outn - o, "\\u%04x", (unsigned)c);
         }
         else {
             if(o + 1 >= outn) break;
-            out[o++] = c;
+            out[o++] = (char)c;
         }
     }
     out[o] = 0;
     return o;
+}
+
+/* ---------- the tags array of a NIP-01 event ---------- */
+
+/* step over one array element that we will not be using */
+static const char * skip_value(const char * p)
+{
+    if(*p == '"') {
+        char dump[8];
+        return read_string(p + 1, dump, sizeof(dump));
+    }
+    if(*p == '{' || *p == '[') {
+        char dump[4];
+        return read_raw(p, dump, sizeof(dump));   /* stops before , or ] */
+    }
+    while(*p && *p != ',' && *p != ']' && *p != '}') p++;
+    return p;
+}
+
+/* One element of the tags array, *pp at its '['.
+   Returns 1 with the first two strings as a pair, 2 when the element is not
+   a well-formed string pair (*pp is left at its start for skip_value), 0 at
+   the end of the array, -1 when there is no array at all. The first
+   occurrence of a tag is the one that counts (the nostr convention). */
+static int tag_next(const char ** pp, char * name, size_t namen,
+                    char * val, size_t valn)
+{
+    const char * p = skip_ws(*pp);
+    if(*p != '[') return -1;
+
+    p = skip_ws(p + 1);
+    if(*p == ']') { *pp = p + 1; return 0; }      /* the array is empty */
+    if(*p != '"') return 2;
+    p = read_string(p + 1, name, namen);
+    p = skip_ws(p);
+    if(*p != ',') return 2;                       /* a name with no value */
+    p = skip_ws(p + 1);
+    if(*p != '"') return 2;
+    p = read_string(p + 1, val, valn);
+    p = skip_ws(p);
+    if(*p != ']') return 2;                       /* slice A's serialization
+                                                     is pairs, nothing more */
+    *pp = p + 1;
+    return 1;
+}
+
+bool json_tags_rebuild(const char * obj, char * out, size_t outn)
+{
+    if(!obj || !out || outn == 0) return false;
+    out[0] = 0;
+
+    char raw[512];
+    if(!json_get(obj, "tags", raw, sizeof(raw))) {
+        /* no tags at all is a legal event: the canonical form is [] */
+        snprintf(out, outn, "%s", "[]");
+        return true;
+    }
+
+    const char * p = skip_ws(raw);
+    if(*p != '[') return false;
+    p++;
+
+    size_t o = 0;
+    out[o++] = '[';                      /* the canonical array wrapper */
+    out[o] = 0;
+    bool first = true;
+    for(;;) {
+        p = skip_ws(p);
+        if(*p == ']') { p++; break; }
+        if(*p == 0) return false;                 /* truncated input */
+        if(*p == ',') { p++; continue; }
+
+        char name[128] = "", val[128] = "";
+        int r = tag_next(&p, name, sizeof(name), val, sizeof(val));
+        if(r < 0) return false;
+        if(r == 2) {
+            /* not a string pair: skip it (a signed event then fails the id
+               recheck honestly, an unsigned one displays best-effort) */
+            p = skip_value(p);
+            continue;
+        }
+        if(r == 0) break;
+
+        char e_name[768], e_val[768];
+        json_escape(name, e_name, sizeof(e_name));
+        json_escape(val, e_val, sizeof(e_val));
+        int w = snprintf(out + o, outn - o, "%s[\"%s\",\"%s\"]",
+                         first ? "" : ",", e_name, e_val);
+        if(w < 0 || (size_t)w >= outn - o) return false;
+        o += (size_t)w;
+        first = false;
+    }
+    if(o + 2 > outn) return false;
+    out[o++] = ']';
+    out[o] = 0;
+    return true;
+}
+
+bool json_tag(const char * obj, const char * name, char * out, size_t outn)
+{
+    if(!obj || !name || !out || outn == 0) return false;
+    out[0] = 0;
+
+    char raw[512];
+    if(!json_get(obj, "tags", raw, sizeof(raw))) return false;
+
+    const char * p = skip_ws(raw);
+    if(*p != '[') return false;
+    p++;
+
+    for(;;) {
+        p = skip_ws(p);
+        if(*p == 0) return false;
+        if(*p == ']') return false;
+        if(*p == ',') { p++; continue; }
+
+        char t_name[128] = "", val[128] = "";
+        int r = tag_next(&p, t_name, sizeof(t_name), val, sizeof(val));
+        if(r < 0) return false;
+        if(r == 2) { p = skip_value(p); continue; }
+        if(r == 0) return false;
+
+        if(strcmp(t_name, name) == 0) {           /* first occurrence wins */
+            snprintf(out, outn, "%s", val);
+            return true;
+        }
+    }
 }

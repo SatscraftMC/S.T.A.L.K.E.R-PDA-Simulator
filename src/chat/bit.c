@@ -46,7 +46,8 @@
  *
  * A real bitchat node can be wired in through a bridge: point
  * PDA_BITCHAT_SOCK (a unix socket) or PDA_BITCHAT_HOST/PDA_BITCHAT_PORT at
- * it and the bridge carries the same envelope in and out of the real mesh.
+ * it and the bridge carries the same signed event line in and out of the
+ * real mesh.
  * tools/bitchat_bridge.py is the reference bridge.
  */
 
@@ -449,20 +450,31 @@ static void bit_disconnect(chat_transport_t * t)
 
 static void deliver_line(chat_transport_t * t, const char * line)
 {
+    /* the dispatch rule, owned by the carriers: a line with a t key stays
+       here (discovery as it always was - hi/hi-ack never reach this
+       function - and the old chat envelope is dropped), a line without t
+       but with a kind is an event, neither is dropped */
     char type[24] = "";
     json_get(line, "t", type, sizeof(type));
-    if(strcmp(type, "msg") != 0) return;
+    if(type[0]) {
+        if(strcmp(type, "msg") == 0 && getenv("PDA_DEBUG"))
+            fprintf(stderr, "[chat] legacy line dropped\n");
+        return;
+    }
+    char kind[24] = "";
+    if(!json_get(line, "kind", kind, sizeof(kind))) {
+        if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] legacy line dropped\n");
+        return;
+    }
 
-    char id[CHAT_ID_MAX] = "", from[CHAT_NAME_MAX] = "", text[CHAT_TEXT_MAX] = "";
+    /* the mesh carries one channel: what is said elsewhere is not for us.
+       Only when a chan tag is present and differs - no tag passes, so the
+       python tools' events behave as they always did */
     char chan[CHAT_ROOM_MAX] = "";
-    json_get(line, "id", id, sizeof(id));
-    json_get(line, "from", from, sizeof(from));
-    json_get(line, "text", text, sizeof(text));
-    json_get(line, "chan", chan, sizeof(chan));
-    if(!text[0]) return;
-    /* the mesh carries one channel: what is said elsewhere is not for us */
+    json_tag(line, "chan", chan, sizeof(chan));
     if(chan[0] && strcmp(chan, chat_mesh_channel()) != 0) return;
-    chat_deliver(chat_transport_index(t), id, from, text);
+
+    chat_deliver_line(chat_transport_index(t), line);
 }
 
 /* a "hi" from a device on the local network: it is how a peer is found.
@@ -521,11 +533,13 @@ static int bit_poll(chat_transport_t * t)
             continue;
         }
 
-        /* the device that sent it is a node of the mesh */
+        /* the device that sent it is a node of the mesh. Its name: the
+           name tag when the line is an event, else the legacy from field */
         char addr[40] = "";
         inet_ntop(AF_INET, &from.sin_addr, addr, sizeof(addr));
         char who[CHAT_NAME_MAX] = "";
-        json_get(buf, "from", who, sizeof(who));
+        json_tag(buf, "name", who, sizeof(who));
+        if(!who[0]) json_get(buf, "from", who, sizeof(who));
         /* our own broadcast comes back to us: we are not a peer of
            ourselves */
         if(!is_local(b, &from.sin_addr)) chat_note_peer(addr, ntohs(from.sin_port), who);
@@ -574,11 +588,11 @@ static int bit_poll(chat_transport_t * t)
     return got;
 }
 
-static bool bit_send(chat_transport_t * t, const char * text, const char * id)
+static bool bit_send(chat_transport_t * t, const char * event, const char * id)
 {
+    (void)id;                     /* the id is the event's, already built */
     bit_t * b = t->priv;
-    char env[1024];
-    chat_envelope(env, sizeof(env), id, chat_identity(), text, (long)time(NULL));
+    const char * env = event;
 
     /* the broadcast: whoever is in earshot hears it */
     for(int i = 0; i < b->n_bcast; i++) {

@@ -5,6 +5,7 @@
 #include "ui/format.h"
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
+#include "identity/contacts.h"
 #include "ui/prefs.h"
 #include "ui/lvutil.h"
 
@@ -75,12 +76,16 @@ typedef struct {
     int rows;              /* rows currently in the list */
     int y;                 /* the height of all the rows together */
     int row_h[ROW_MAX];    /* height of each row, for the scroll-back */
+    unsigned c_ver;        /* contacts_version() when the list was drawn:
+                              Trust/REMOVE in the Contacts tab has to
+                              refresh the badge on rows already on screen */
 } chat_ui_t;
 
 static chat_ui_t g_ui;
 
 static void chat_tick(lv_timer_t * timer);
 static void refresh(void);
+static void rebuild(void);
 static void scroll_to_top(void);
 
 /* the panel is rebuilt when the theme changes: the old timer has to go */
@@ -204,6 +209,27 @@ static void add_row(const chat_msg_t * m)
     lv_obj_set_style_text_color(nl, lv_color_hex(name_col), LV_PART_MAIN);
     lv_obj_set_style_pad_all(nl, 0, LV_PART_MAIN);
 
+    /* the verified mark: inbound, signature verified, AND the key is one
+       the user pressed Trust on. Anything else (unsigned, bad sig,
+       unknown key, our own rows) shows no mark, ever. It sits in the name
+       column - 7px of the existing carrier-green, no new font glyph - so
+       it clears the time at x=42 and the carrier tag at x=108 */
+    if(!m->outbound && m->sig == CHAT_SIG_OK && m->pub[0] && contacts_has(m->pub)) {
+        lv_obj_t * dot = lv_obj_create(row);
+        lv_obj_set_pos(dot, name_x, 5);
+        lv_obj_set_size(dot, 7, 7);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(PDA_CARRIER_UP), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(dot, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(dot, 0, LV_PART_MAIN);
+        lv_obj_set_clickable(dot, false);
+        lv_obj_set_scrollbar_mode(dot, LV_SCROLLBAR_MODE_OFF);
+        /* the name slides right so the mark never sits on the letters */
+        lv_obj_set_pos(nl, name_x + 10, 1);
+        lv_obj_set_width(nl, NAME_W - 10);
+    }
+
     /* the carrier it came in on - or, for our own messages, the ones it
        went out on */
     if(show_carrier) {
@@ -265,17 +291,60 @@ static void add_row(const chat_msg_t * m)
     /* the hairline between the messages */
     grit_rule(row, 0, th + 5, lv_pct(100), false, PDA_RULE);
 }
+/* A full rebuild of the log: clean list, reset rows/y/rendered, re-add
+   every message. Extracted from refresh()'s trim branch so Trust/REMOVE in
+   the Contacts tab (a contacts_version() change) can take the same path
+   and repaint the verified marks.
+
+   Scroll on a rebuild: the layout is recreated with the same rows, so the
+   previous raw offset is restored as-is (clamped to the new max), or 0 if
+   the view was at the top. Deliberately NOT refresh()'s old_y + added
+   rule, which only makes sense for incremental prepends that shift
+   content down - copying it here would fling the view to the bottom. */
+static void rebuild(void)
+{
+    int old_y = lv_obj_get_scroll_y(g_ui.list);
+    bool stick = old_y <= 4;
+
+    lv_kill_tree(g_ui.list);
+    lv_obj_clean(g_ui.list);
+    g_ui.rows = 0;
+    g_ui.y = 0;
+    g_ui.rendered = 0;
+
+    bool show_system = prefs_bool("show_system", true);
+    int count = chat_count();
+    for(int i = 0; i < count; i++) {
+        const chat_msg_t * m = chat_get(i);
+        if(!m) continue;
+        if(m->kind == CHAT_KIND_SYS && !show_system) continue;
+        add_row(m);
+    }
+    g_ui.rendered = count;
+    g_ui.c_ver = contacts_version();
+
+    lv_obj_update_layout(g_ui.list);
+    if(stick) {
+        lv_obj_scroll_to_y(g_ui.list, 0, LV_ANIM_OFF);
+    }
+    else {
+        int32_t max_y = lv_obj_get_scroll_y(g_ui.list) +
+                        lv_obj_get_scroll_bottom(g_ui.list);
+        int32_t y = old_y;
+        if(y > max_y) y = max_y;
+        if(y < 0) y = 0;
+        lv_obj_scroll_to_y(g_ui.list, y, LV_ANIM_OFF);
+    }
+}
+
 static void refresh(void)
 {
     int count = chat_count();
     bool stick = at_top();
     int old_y = lv_obj_get_scroll_y(g_ui.list);
     if(count < g_ui.rendered) {     /* the log was trimmed: rebuild */
-        lv_kill_tree(g_ui.list);
-        lv_obj_clean(g_ui.list);
-        g_ui.rows = 0;
-        g_ui.y = 0;
-        g_ui.rendered = 0;
+        rebuild();
+        return;
     }
     bool show_system = prefs_bool("show_system", true);
     int added = 0;
@@ -317,6 +386,11 @@ static void chat_tick(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
     chat_poll();
+
+    /* Trust/REMOVE in the Contacts tab changed the trust list: the rows
+       already on screen have to be redrawn, because their mark is what
+       that change is about */
+    if(contacts_version() != g_ui.c_ver) rebuild();
     refresh();
 
     /* test hook: say something on startup (PDA_TEST_SEND). PDA_TEST_SEND_IN
@@ -664,6 +738,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* the crop marks go on last, so they are on top of the panel */
     if(frame) grit_corners(frame, FRAME_W, FRAME_H, PDA_FRAME);
 
+    g_ui.c_ver = contacts_version();
     refresh();
     int poll = atoi(prefs_str("log_poll", "200"));
     if(poll < 50) poll = 200;

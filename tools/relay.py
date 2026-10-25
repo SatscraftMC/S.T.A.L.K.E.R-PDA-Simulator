@@ -13,12 +13,21 @@ pub/sub server you can host yourself):
 
     python3 tools/relay.py --port 7788 --ntfy https://ntfy.sh --topic pda-zone
 
-Every client sees the same envelope the PDA uses:
+Every client sees the same NIP-01 event the PDA uses (chat messages are
+signed nostr events; discovery chatter is still unsigned legacy):
 
-    {"v":1,"t":"msg","id":"...","from":"Satscraft","room":"SECTOR",
-     "text":"anyone got the drop coords?","ts":1730000000}
+    {"id":"<64 hex>","pubkey":"<64 hex>","created_at":1730000000,"kind":1,
+     "tags":[["room","SECTOR"],["name","Satscraft"]],
+     "content":"anyone got the drop coords?","sig":"<128 hex>"}
+
+Unsigned lines (tests, the ntfy bridge below) have "pubkey":"" and no
+"sig" field. The relay never looks inside: it reads one JSON object per
+line and hands it to the other clients (json.loads -> json.dumps, so
+field order and whitespace may differ from what the sender wrote - which
+is why the app signs the logical field values, never the raw bytes).
 """
 import argparse
+import hashlib
 import json
 import os
 import selectors
@@ -56,6 +65,38 @@ class Relay:
     def log(self, *a):
         if self.verbose:
             print("[relay]", *a, flush=True)
+
+    # ---------- what an event carries ----------
+
+    @staticmethod
+    def tag(msg, name, default=""):
+        for t in msg.get("tags") or []:
+            if isinstance(t, (list, tuple)) and len(t) > 1 and t[0] == name:
+                return t[1]
+        return default
+
+    @classmethod
+    def who(cls, msg, default="pda"):
+        """the display label: the name tag, else the legacy from, else pda"""
+        return cls.tag(msg, "name") or msg.get("from") or default
+
+    @staticmethod
+    def body(msg):
+        """what was said: content on an event, text on a legacy line"""
+        return msg.get("content") or msg.get("text") or ""
+
+    @staticmethod
+    def event(content, tags, created_at=None):
+        """the unsigned event shape: pubkey "", no sig - hashing needs no
+        key, and unsigned lines are never id-checked on the receiving side
+        anyway. The id is the SHA-256 of the canonical serialization, the
+        same one the app would compute."""
+        ts = int(created_at if created_at is not None else time.time())
+        ser = json.dumps([0, "", ts, 1, tags, content],
+                         separators=(",", ":"), ensure_ascii=False)
+        eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+        return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                "tags": tags, "content": content}
 
     # ---------- the room ----------
 
@@ -107,7 +148,7 @@ class Relay:
             self.seen.add(mid)
             if len(self.seen) > 2000:
                 self.seen = set(list(self.seen)[-1000:])
-        self.log("->", msg.get("from"), msg.get("text"))
+        self.log("->", self.who(msg), self.body(msg))
         self.broadcast(msg, skip=client)
         if self.ntfy:
             threading.Thread(target=self.ntfy_publish, args=(msg,), daemon=True).start()
@@ -116,10 +157,10 @@ class Relay:
 
     def ntfy_publish(self, msg):
         try:
-            body = msg.get("text", "").encode()
+            body = self.body(msg).encode()
             url = f"{self.ntfy.rstrip('/')}/{self.topic}"
             req = urllib.request.Request(url, data=body, method="POST")
-            req.add_header("Title", msg.get("from", "pda"))
+            req.add_header("Title", self.tag(msg, "name") or "pda")
             req.add_header("X-Tags", "pda")
             with urllib.request.urlopen(req, timeout=10) as r:
                 r.read()
@@ -152,13 +193,14 @@ class Relay:
                                 continue
                             if mid:
                                 self.seen.add(mid)
-                        msg = {
-                            "v": 1, "t": "msg", "id": mid or str(time.time()),
-                            "from": ev.get("title", "NET"),
-                            "room": "SECTOR", "text": text,
-                            "ts": int(time.time()),
-                        }
-                        self.log("ntfy ->", msg["from"], text)
+                        # an unsigned event back into the room: the tag set
+                        # is what the legacy fields were - name from the
+                        # notification title, room SECTOR, no chan tag (a
+                        # missing chan passes the app's filter, so nothing
+                        # about behavior changes)
+                        msg = self.event(text, [["name", ev.get("title", "NET")],
+                                                ["room", "SECTOR"]])
+                        self.log("ntfy ->", self.who(msg), text)
                         self.broadcast(msg)
             except Exception as e:                  # noqa: BLE001 - keep trying
                 self.log("ntfy subscribe failed:", e)

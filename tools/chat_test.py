@@ -12,14 +12,33 @@ The app is started with PDA_START_TAB=1 (the Messages tab) and PDA_DEBUG=1,
 so the test can read what happened from its log. Screenshots are taken of the
 window so the result can be looked at, and the lit pixels are counted to
 prove the message really landed on the screen.
+
+It also runs the identity checks of spec-nostr-identity: the NIST sha256
+vectors from the [id] selftest line, a signed round trip between two app
+instances (with an emoji over the relay, which regression-guards the
+surrogate-pair fix), the forgery cases, and at the end a grep proving no
+key file's contents ever reached a log.
 """
+import atexit
+import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+
+# Isolation, at module top before anything derives a path from it: no run
+# ever writes the real ~/.config/pda/ (the identity key and contacts would
+# land there on the first test run otherwise). start_app() points each app
+# instance at its own directory inside this one, so two instances never
+# share a key or a settings file.
+RUN_TMP = tempfile.mkdtemp(prefix="chat_test_")
+atexit.register(lambda: shutil.rmtree(RUN_TMP, ignore_errors=True))
+os.environ.setdefault("PDA_PREFS", os.path.join(RUN_TMP, "prefs.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
@@ -44,12 +63,31 @@ def free_port():
     return p
 
 
+INSTANCE_DIRS = []      # every one, for the no-key-in-the-logs grep
+ALL_LOGS = []           # every app log this run wrote
+
+
+def instance_dir(name):
+    """a fresh directory (prefs.conf, identity.nsec, contacts.conf) for one
+    app instance: PDA_PREFS moves all three together, which is how two
+    instances on one box stay isolated"""
+    d = os.path.join(RUN_TMP, name)
+    os.makedirs(d, exist_ok=True)
+    if d not in INSTANCE_DIRS:
+        INSTANCE_DIRS.append(d)
+    return d
+
+
 def start_app(name, env_extra):
     env = dict(os.environ)
     env.update(env_extra)
+    if "PDA_PREFS" not in (env_extra or {}):
+        env["PDA_PREFS"] = os.path.join(instance_dir(name), "prefs.conf")
     env.setdefault("DISPLAY", ":0")
     logpath = os.path.join(LOGDIR, f"chat_{name}.log")
     log = open(logpath, "w")
+    if logpath not in ALL_LOGS:
+        ALL_LOGS.append(logpath)
     p = subprocess.Popen([APP], stdout=log, stderr=subprocess.STDOUT, env=env)
     return p, log, logpath
 
@@ -87,6 +125,70 @@ def light_pixels(path, y0, y1):
             if r + g + b > 330:
                 n += 1
     return n
+
+
+def unsigned_event(text, name, room="SECTOR", ts=None):
+    """the one unsigned shape of spec-nostr-identity §4: pubkey "", no sig,
+    id = sha256 of the canonical serialization (hashing needs no key - the
+    tests hold no key, and that is exactly the honest CHAT_SIG_NONE path)"""
+    ts = int(ts if ts is not None else time.time())
+    tags = [["room", room], ["name", name]]
+    ser = json.dumps([0, "", ts, 1, tags, text],
+                     separators=(",", ":"), ensure_ascii=False)
+    eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+    return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+            "tags": tags, "content": text}
+
+
+def name_of(msg, default=""):
+    """the display label: the name tag (what the sender signs), else nothing"""
+    for t in msg.get("tags") or []:
+        if isinstance(t, (list, tuple)) and len(t) > 1 and t[0] == "name":
+            return t[1]
+    return default
+
+
+def npub_to_hex(npub, hrp="npub"):
+    """A ~40-line independent bech32 decoder: BIP-173 reference logic, pure
+    python, an algorithm rather than a key. It is how the suite checks the
+    app's [id] pub= hex against its npub= bech32 without trusting the app's
+    own C code to do both sides of the comparison."""
+    charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    def polymod(values):
+        gen = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+        chk = 1
+        for v in values:
+            b = chk >> 25
+            chk = ((chk & 0x1ffffff) << 5) ^ v
+            for i in range(5):
+                if (b >> i) & 1:
+                    chk ^= gen[i]
+        return chk
+
+    pos = npub.rfind("1")
+    if pos < 1:
+        raise ValueError("no separator")
+    h, data = npub[:pos], npub[pos + 1:]
+    if h != hrp:
+        raise ValueError("wrong hrp")
+    values = [charset.index(c) for c in data]
+    if polymod([ord(c) >> 5 for c in h] + [0] +
+               [ord(c) & 31 for c in h] + values) != 1:
+        raise ValueError("bad checksum")
+    payload, acc, bits = values[:-6], 0, 0
+    out = bytearray()
+    for v in payload:
+        acc = (acc << 5) | v
+        bits += 5
+        while bits >= 8:
+            bits -= 8
+            out.append((acc >> bits) & 0xff)
+    if bits >= 5 or ((acc << (8 - bits)) & 0xff):
+        raise ValueError("bad padding")
+    if len(out) != 32:
+        raise ValueError(f"expected 32 bytes, got {len(out)}")
+    return bytes(out).hex()
 
 
 def wait_for_log(path, pattern, timeout=12):
@@ -132,12 +234,10 @@ def test_net(port):
         note(True, f"app booted ({os.path.getsize(log_a)} bytes of log)")
 
         before = shot("before")
-        payload = {
-            "v": 1, "t": "msg", "id": "test0001", "from": "ROOK",
-            "room": "SECTOR", "text": "anyone got the drop coords",
-            "ts": int(time.time()),
-        }
-        peer.sendall((json.dumps(payload) + "\n").encode())
+        # the unsigned event with a name tag: a test holds no key, so this
+        # is the honest CHAT_SIG_NONE path the receiver must still display
+        peer.sendall((json.dumps(unsigned_event(
+            "anyone got the drop coords", "ROOK")) + "\n").encode())
         data = wait_for_log(log_a, r"\[chat\] recv via NET from ROOK", 10)
         note("recv via NET from ROOK" in data, "the app received the peer's message")
 
@@ -166,11 +266,14 @@ def test_net(port):
                     m = json.loads(l)
                 except json.JSONDecodeError:
                     continue
-                if m.get("t") == "msg" and m.get("text"):
+                if m.get("kind") == 1 and m.get("content"):
                     got = m
         note(got is not None, "the app's own message reached the relay")
         if got:
-            note(got.get("from") == "Satscraft", f"the relay sees the sender ({got.get('from')})")
+            who = name_of(got)
+            note(who == "Satscraft", f"the relay sees the sender ({who})")
+            note(got.get("pubkey") and len(got.get("sig", "")) == 128,
+                 "the message went out signed (pubkey + 128-hex sig)")
     finally:
         stop_app(app, applog)
         peer.close()
@@ -235,9 +338,7 @@ def test_bit():
     try:
         time.sleep(2.0)
         peer.sendto(
-            (json.dumps({"v": 1, "t": "msg", "id": "b1", "from": "ROOK",
-                         "room": "SECTOR", "text": "heard you",
-                         "ts": int(time.time())}) + "\n").encode(),
+            (json.dumps(unsigned_event("heard you", "ROOK")) + "\n").encode(),
             ("127.0.0.1", 2425))
         data = wait_for_log(log_path, r"\[chat\] recv via BIT from ROOK", 8)
         note("recv via BIT from ROOK" in data,
@@ -353,6 +454,275 @@ def test_fips():
             mock.kill()
 
 
+
+
+def test_identity():
+    print("the device key: NIST vectors, first-run generation, hex vs npub", flush=True)
+    d = instance_dir("identity")
+    app, log_h, log_path = start_app("identity", {
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_BIT_SCAN": "off",
+        "PDA_NET_SCAN": "off",
+    })
+    try:
+        data = wait_for_log(log_path, r"\[id\] selftest", 10)
+
+        v = re.search(r"\[id\] selftest (\w+) (\w+) (\w+)", data)
+        expect = (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        )
+        note(v is not None and tuple(v.groups()) == expect,
+             "the [id] selftest line carries the three published NIST sha256 vectors")
+
+        m = re.search(r"\[id\] pub=([0-9a-f]{64}) npub=(npub1[0-9a-z]+)", data)
+        note(m is not None, "the app logged its own key as hex and npub")
+        if m:
+            try:
+                note(npub_to_hex(m.group(2)) == m.group(1),
+                     "the npub decodes back to exactly the logged hex")
+            except ValueError as e:
+                note(False, f"the npub decodes as bech32 ({e})")
+
+        keyfile = os.path.join(d, "identity.nsec")
+        note(os.path.exists(keyfile), "identity.nsec was written on the first run")
+        if os.path.exists(keyfile):
+            mode = oct(os.stat(keyfile).st_mode & 0o777)
+            note(mode == "0o600", f"identity.nsec is private ({mode})")
+            nsec = open(keyfile).read().strip()
+            note(nsec.startswith("nsec1"), "the key file holds a bech32 nsec")
+            note(nsec not in data, "the nsec never reaches the log (the npub may)")
+    finally:
+        stop_app(app, log_h)
+
+
+def test_roundtrip():
+    print("the signature round trip: A signs, B verifies", flush=True)
+    # The two instances get separate prefs directories (separate keys) and
+    # separate carrier ports, so the only path between them is the relay -
+    # and the relay re-dumps every line with ensure_ascii=True, which is
+    # exactly what breaks an unsigned emoji round trip if read_string()
+    # cannot combine surrogate pairs.
+    port = free_port()
+    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
+                              "--port", str(port), "-v"],
+                             stdout=open(os.path.join(LOGDIR, "chat_rt_relay.log"), "w"),
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+
+    base = {
+        "PDA_RELAY_HOST": "127.0.0.1",
+        "PDA_RELAY_PORT": str(port),
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_BIT_SCAN": "off",
+        "PDA_NET_SCAN": "off",
+    }
+    emoji = "\U0001f4cd"          # a non-BMP character: the surrogate case
+    a, alog, apath = start_app("rt_a", dict(base, **{
+        "PDA_BITCHAT_PORT": "2425", "PDA_NET_PORT": "7790",
+        "PDA_NAME": "Satscraft",
+        "PDA_TEST_SEND": "drop is marked " + emoji,
+        "PDA_TEST_SEND_IN": "4",
+    }))
+    b, blog, bpath = start_app("rt_b", dict(base, **{
+        "PDA_BITCHAT_PORT": "2426", "PDA_NET_PORT": "7791",
+        "PDA_NAME": "WUMGUB",
+    }))
+    try:
+        adata = wait_for_log(apath, r"\[id\] pub=", 10)
+        m = re.search(r"\[id\] pub=([0-9a-f]{64}) npub=(npub1[0-9a-z]+)", adata)
+        note(m is not None, "A generated a key and logged it")
+        pub_a, npub_a = (m.group(1), m.group(2)) if m else ("", "")
+
+        bdata = wait_for_log(bpath, re.escape("sig ok pub=" + pub_a), 20)
+        note(pub_a and ("sig ok pub=" + pub_a) in bdata,
+             "B recomputed the id and verified A's BIP-340 signature")
+        note("[chat] recv via NET from Satscraft: drop is marked " + emoji in bdata,
+             "the signed message came in over NET/relay and was displayed")
+        note(emoji in bdata,
+             "the emoji survived the relay's ensure_ascii re-dump and the id still matched")
+        if pub_a:
+            try:
+                note(npub_to_hex(npub_a) == pub_a,
+                     "A's npub decodes to A's hex pubkey")
+            except ValueError as e:
+                note(False, f"A's npub decodes as bech32 ({e})")
+            note(("sig ok pub=" + pub_a) in bdata and pub_a == m.group(1),
+                 "the verified pubkey is the one A logged")
+    finally:
+        stop_app(a, alog)
+        stop_app(b, blog)
+        relay.terminate()
+        try:
+            relay.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
+
+
+def test_forgery():
+    print("forgery: unsigned, wrong sig, a trusted key signed elsewhere, a swapped body", flush=True)
+    port = free_port()
+    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
+                              "--port", str(port), "-v"],
+                             stdout=open(os.path.join(LOGDIR, "chat_fg_relay.log"), "w"),
+                             stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+    peer.settimeout(0.5)
+
+    base = {
+        "PDA_RELAY_HOST": "127.0.0.1",
+        "PDA_RELAY_PORT": str(port),
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_BIT_SCAN": "off",
+        "PDA_NET_SCAN": "off",
+        "PDA_TEST_SEND_IN": "3",
+    }
+    # two senders: A is the key the device will Trust, A2 is a second key
+    # whose signature gets pinned onto A's identity for case (c)
+    a, alog, apath = start_app("fg_a", dict(base, **{
+        "PDA_BITCHAT_PORT": "2425", "PDA_NET_PORT": "7790",
+        "PDA_NAME": "Satscraft", "PDA_TEST_SEND": "this one is really from A",
+    }))
+    a2, a2log, a2path = start_app("fg_a2", dict(base, **{
+        "PDA_BITCHAT_PORT": "2427", "PDA_NET_PORT": "7792",
+        "PDA_NAME": "WUMGUB", "PDA_TEST_SEND": "this one is really from A2",
+    }))
+
+    events = {}
+    try:
+        end = time.time() + 14
+        while time.time() < end and len(events) < 2:
+            try:
+                data = peer.recv(8192)
+            except socket.timeout:
+                continue
+            for line in data.decode("utf-8", "replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    m = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if m.get("kind") == 1 and m.get("sig"):
+                    events[m.get("content", "")] = m
+        note(len(events) >= 2, f"captured two genuinely signed events ({len(events)})")
+        if len(events) < 2:
+            return
+        ev_a = events["this one is really from A"]
+        ev_a2 = events["this one is really from A2"]
+        pub_a = ev_a["pubkey"]
+    finally:
+        stop_app(a, alog)
+        stop_app(a2, a2log)
+        peer.close()
+        relay.terminate()
+        try:
+            relay.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
+
+    # the device: Trust on A's key, written before boot (log-driven suite)
+    bd = instance_dir("fg_b")
+    with open(os.path.join(bd, "contacts.conf"), "w") as f:
+        f.write(f"{pub_a} = Satscraft\n")
+
+    b, blog, bpath = start_app("fg_b", {
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_BIT_SCAN": "off",
+        "PDA_NET_SCAN": "off",
+    })
+    try:
+        wait_for_log(bpath, r"\[id\] pub=", 10)
+        time.sleep(1.0)
+
+        ts = int(time.time())
+        # (a) no claim at all: pubkey "" and no sig
+        fa = unsigned_event("i am really Satscraft", "Satscraft", ts=ts + 1)
+        # (b) a well-formed sig that verifies against nothing (A2's line,
+        #     sig zeroed: the id still rechecks, the signature cannot)
+        fb = dict(ev_a2)
+        fb["sig"] = "00" * 64
+        # (c) A's trusted pubkey with A2's signature over it
+        ser_c = json.dumps([0, pub_a, ev_a2["created_at"], 1, ev_a2["tags"],
+                            ev_a2["content"]],
+                           separators=(",", ":"), ensure_ascii=False)
+        fc = {"id": hashlib.sha256(ser_c.encode("utf-8")).hexdigest(),
+              "pubkey": pub_a, "created_at": ev_a2["created_at"],
+              "kind": 1, "tags": ev_a2["tags"], "content": ev_a2["content"],
+              "sig": ev_a2["sig"]}
+        # (d) A's line with the body swapped after signing: the id no
+        #     longer matches the content, which is what the recheck is for
+        fd = dict(ev_a)
+        fd["content"] = "the body was swapped after signing"
+
+        peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        peer.bind(("127.0.0.2", 2425))
+        for forged in (fa, fb, fc, fd):
+            peer.sendto((json.dumps(forged) + "\n").encode(),
+                        ("127.0.0.1", 2425))
+            time.sleep(0.4)
+        peer.close()
+
+        data = wait_for_log(bpath, r"the body was swapped", 10)
+        note("[chat] unsigned from=Satscraft" in data,
+             "(a) an unsigned line: logged unsigned, displayed anyway")
+        n_bad = len(re.findall(r"\[chat\] sig bad pub=", data))
+        note(n_bad >= 3,
+             f"(b,c,d) three signed claims that do not verify ({n_bad} sig bad)")
+        note(("sig bad pub=" + pub_a) in data,
+             "(c) the trusted contact's key with someone else's signature is bad")
+        note("i am really Satscraft" in data,
+             "the forged lines are still displayed - honestly, with no badge claim")
+        note(b.poll() is None, "the device is alive after four forgeries")
+        note("line(s) skipped" not in data,
+             "the seeded contacts.conf loaded without a skip line")
+    finally:
+        stop_app(b, blog)
+
+
+def test_no_secret():
+    print("no key material in any log", flush=True)
+    secrets = []
+    for d in INSTANCE_DIRS:
+        kf = os.path.join(d, "identity.nsec")
+        if not os.path.exists(kf):
+            continue
+        nsec = open(kf).read().strip()
+        secrets.append(nsec)
+        try:
+            secrets.append(bytes.fromhex(npub_to_hex(nsec, hrp="nsec")).hex())
+        except ValueError:
+            pass
+    note(bool(secrets), "there is at least one key file to check against")
+
+    leaks = []
+    logs = list(ALL_LOGS)
+    try:
+        logs += [os.path.join(LOGDIR, f) for f in os.listdir(LOGDIR)
+                 if os.path.isfile(os.path.join(LOGDIR, f))]
+    except OSError:
+        pass
+    for path in sorted(set(logs)):
+        try:
+            with open(path, errors="replace") as f:
+                data = f.read()
+        except OSError:
+            continue
+        for sec in secrets:
+            if sec and sec in data:
+                leaks.append(path)
+    note(not leaks,
+         f"no identity.nsec contents (bech32 or hex) in any of {len(set(logs))} logs")
+
+
 def test_carrier_picker():
     print("the carrier picker - which carriers a message goes out on", flush=True)
     # The Messages tab has a row of buttons: one per carrier. A carrier that
@@ -408,6 +778,12 @@ def main():
         return 1
     os.makedirs(LOGDIR, exist_ok=True)
 
+    test_identity()
+    print()
+    test_roundtrip()
+    print()
+    test_forgery()
+    print()
     test_net(free_port())
     print()
     test_carrier_picker()
@@ -417,6 +793,8 @@ def main():
     test_bit_discovery()
     print()
     test_fips()
+    print()
+    test_no_secret()
 
     print()
     if FAIL:

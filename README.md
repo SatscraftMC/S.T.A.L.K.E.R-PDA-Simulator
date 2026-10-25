@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.5.4-alpha**
+**v0.6.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -32,6 +32,19 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **Messages tab: one room, three carriers** (BIT local mesh, FIPS mesh, NET internet); messages go out on all active carriers; incoming tagged by carrier
 - **Carrier picker** in Messages strip — per-carrier send toggle (off still receives); remembered in settings
 - **Newest message at top** of log; scroll back for older lines
+- **Signed messages (nostr NIP-01)**: every chat message is a real signed event —
+  the device holds a keypair (`identity.nsec`, generated on first run, 0600, never
+  in the repo or a log), the display name rides as a *signed* tag, and a peer
+  cannot become somebody else by changing its name. The receive side recomputes
+  the event id and verifies the BIP-340 signature before anything is trusted.
+- **Trust & the verified badge**: the Contacts tab has two sections — SEEN
+  (signed speakers heard this session) and TRUSTED (keys you pressed TRUST on,
+  kept in `contacts.conf`). A message row shows the green verified mark only
+  when the signature checked out **and** the key is one you Trusted; tap a row
+  for its full `npub` to compare against the other device's User page.
+- **`nstr` key row (Settings → User)**: the device's `npub` with `[KEY]` (reveal
+  npub + nsec, only while asked), `[NEW]` (two-press regenerate) and `[PASTE]`
+  (import an `nsec`, bech32 or 64-hex, validated before anything is saved).
 - **Mesh map** on Other → Connections → Bitchat — this device in center, peers around with names & lines; 5-min peer timeout
 - **Local mesh uses broadcast + direct peer unicast** — subnet sweep finds peers, messages sent directly to known peers (bypasses firewall/AP broadcast drops); discovery row shows subnet
 - **Firewall**: needs UDP 2425 (`sudo ufw allow 2425/udp`); Bitchat page warns when no peers answer
@@ -78,6 +91,13 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 | **FIPS** | `fips` daemon native API (`/run/fips/api.sock`) | Daemon running; without it badge = red `no daemon` |
 
 When no carrier can send: `no carrier up - kept locally (BIT no link, FIPS no daemon, NET no relay)`.
+
+All three carriers carry the same wire format: one **signed nostr NIP-01 event**
+per line (`id` = SHA-256 of the canonical serialization, `sig` = BIP-340, the
+display name and the `room`/`chan` as signed tags). Discovery chatter (`hi`,
+`hi-ack`, the relay hello) stays unsigned legacy `{"v":1,"t":...}` — it carries
+no speech and grants no trust. Unsigned events (tests, the relay's ntfy bridge)
+keep the same shape with `pubkey:""` and no `sig` field.
 
 ## Build
 
@@ -148,7 +168,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Status
 
-Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Contacts and Camera are visible stub tabs. TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 74 keys EN + PL in the `TR_` table, while the two stub panels, the map's flag words and the wallet backend's own messages are still English.
+Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 88 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
 
 ## License
 

@@ -1,6 +1,7 @@
 #include "ui/pda_shell.h"
 #include "ui/palette.h"
 #include "ui/chat_ui.h"
+#include "ui/contacts_ui.h"
 #include "ui/other_ui.h"
 #include "ui/radio_ui.h"
 #include "ui/wallet_ui.h"
@@ -78,16 +79,19 @@ static const tr_id_t g_tab_ids[TAB_COUNT] = {
     TR_TAB_WALLET, TR_TAB_OTHER
 };
 
-/* the panels that are still stubs (the other titles/bodies here are the
-   leftovers of the same table - Contacts and Camera are the only stubs
-   left; the Wallet body was the old fake-balance stub until wallet_ui.c
-   took the tab over, see wallet_build_plan.md) */
+/* the panel table, indexed by panel number (the tab after the Map).
+   Index 1 is Contacts: contacts_ui owns it now, so its title and body
+   are placeholders - the arrays keep their length and positions because
+   they are indexed by number and Camera (i==3) still reads them through
+   the fallback build_panel() branch. The Wallet body was the old
+   fake-balance stub until wallet_ui.c took that tab over (see
+   wallet_build_plan.md); Camera is the only real stub left. */
 static const char * const g_panel_titles[TAB_COUNT - 1] = {
-    "Messages", "Contacts", "Radio", "Camera", "Wallet", "Other"
+    "Messages", "", "Radio", "Camera", "Wallet", "Other"
 };
 static const char * const g_panel_bodies[TAB_COUNT - 1] = {
     "No new messages.",
-    "No contacts yet.",
+    "",                             /* owned by contacts_ui now */
     "Signal: none",
     "No camera feed yet.",
     "",
@@ -495,6 +499,9 @@ static void set_tab(shell_t * sh, int idx)
     if(idx < 0 || idx >= TAB_COUNT) return;
     sh->active_tab = idx;
     if(idx == 1) chat_reset_unread();     /* the Messages tab is open now */
+    /* a revealed nsec does not survive leaving the Other tab (set_tab only
+       hides the panel, so the panel is where the clear has to happen) */
+    if(idx != TAB_COUNT - 1) other_ui_hide_secrets();
     redraw_header();
     restyle_labels();
     update_title(sh);
@@ -2122,6 +2129,7 @@ lv_obj_t * pda_shell_create(lv_obj_t * parent, lv_group_t * group)
 
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, group);   /* the real one */
+        else if(i == 1) sh->panels[i] = contacts_ui_create(sh->view, group); /* Contacts */
         else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, group); /* Radio */
         else if(i == 4) sh->panels[i] = wallet_ui_create(sh->view, group); /* Wallet */
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, group);
@@ -2170,6 +2178,9 @@ void pda_shell_retheme(void)
            or in each _destroy() is the fix under discussion, and only one
            of the two may ever get it. */
         if(i == 0) { chat_ui_destroy(); sh->panels[i] = NULL; continue; }
+        /* contacts_ui_destroy() is modelled on wallet_ui_destroy below:
+           it kills its timer and animations and deletes its own tree */
+        if(i == 1) { contacts_ui_destroy(); sh->panels[i] = NULL; continue; }
         if(i == 2) { radio_ui_destroy(); sh->panels[i] = NULL; continue; }
         /* wallet_ui_destroy() kills the animations and deletes the tree
            itself (and with it the keypad group's handles), so the shell
@@ -2181,6 +2192,7 @@ void pda_shell_retheme(void)
     }
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(i == 0) sh->panels[i] = chat_ui_create(sh->view, sh->group);
+        else if(i == 1) sh->panels[i] = contacts_ui_create(sh->view, sh->group);
         else if(i == 2) sh->panels[i] = radio_ui_create(sh->view, sh->group);
         else if(i == 4) sh->panels[i] = wallet_ui_create(sh->view, sh->group);
         else if(i == TAB_COUNT - 2) sh->panels[i] = other_ui_create(sh->view, sh->group);

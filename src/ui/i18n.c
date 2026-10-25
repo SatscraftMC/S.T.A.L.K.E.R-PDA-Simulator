@@ -78,6 +78,20 @@ static const char * const s_en[TR_COUNT] = {
     [TR_WALLET_MAKE_FAILED]  = "could not make an invoice",
     [TR_WALLET_CANT_PAY]     = "that invoice cannot be paid",
     [TR_WALLET_PAY_FAILED]   = "the payment did not go through",
+    [TR_CONTACTS_TRUSTED]    = "TRUSTED",
+    [TR_CONTACTS_SEEN]       = "SEEN",
+    [TR_CONTACTS_NONE_TRUSTED] = "no trusted contacts yet",
+    [TR_CONTACTS_NONE_SEEN]  = "nobody heard yet",
+    [TR_CONTACT_TRUST]       = "TRUST",
+    [TR_CONTACT_REMOVE]      = "REMOVE",
+    [TR_FAILED]              = "FAILED",
+    [TR_KEY_ROW]             = "nstr key",
+    [TR_KEY_NOT_SET]         = "not set",
+    [TR_KEY_KEY]             = "KEY",
+    [TR_KEY_NEW]             = "NEW",
+    [TR_KEY_SURE]            = "SURE?",
+    [TR_KEY_PASTE]           = "PASTE",
+    [TR_KEY_PASTE_HINT]      = "nsec or 64 hex",
 };
 
 static const char * const s_pl[TR_COUNT] = {
@@ -155,6 +169,20 @@ static const char * const s_pl[TR_COUNT] = {
     [TR_WALLET_MAKE_FAILED]  = "nie uda\u0142o si\u0119 wystawi\u0107 faktury",
     [TR_WALLET_CANT_PAY]     = "tej faktury nie da si\u0119 zap\u0142aci\u0107",
     [TR_WALLET_PAY_FAILED]   = "p\u0142atno\u015b\u0107 nie dosz\u0142a do skutku",
+    [TR_CONTACTS_TRUSTED]    = "ZAUFANE",
+    [TR_CONTACTS_SEEN]       = "WIDZIANE",
+    [TR_CONTACTS_NONE_TRUSTED] = "brak zaufanych kontakt\u00f3w",
+    [TR_CONTACTS_NONE_SEEN]  = "nikogo jeszcze nie s\u0142yszano",
+    [TR_CONTACT_TRUST]       = "ZAUFAJ",
+    [TR_CONTACT_REMOVE]      = "USU\u0143",
+    [TR_FAILED]              = "B\u0141\u00c4D",
+    [TR_KEY_ROW]             = "klucz nstr",
+    [TR_KEY_NOT_SET]         = "nieustawiony",
+    [TR_KEY_KEY]             = "KLUCZ",
+    [TR_KEY_NEW]             = "NOWY",
+    [TR_KEY_SURE]            = "PEWNIE?",
+    [TR_KEY_PASTE]           = "WKLEJ",
+    [TR_KEY_PASTE_HINT]      = "nsec lub 64 hex",
 };
 
 static int s_lang = TR_LANG_EN;
