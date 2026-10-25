@@ -1443,8 +1443,16 @@ static void map_update(shell_t * sh)
     if(getenv("PDA_DEBUG")) {
         for(int i = 0; i < sh->n_packs; i++) {
             const map_level_t * lv = pick_pack_level(&sh->packs[i], zn);
-            fprintf(stderr, "[pack] %-14.14s levels=%d best=%s step=%g contains=%d area=%g\n",
-                    sh->packs[i].name, sh->packs[i].n_lv,
+            /* n_lv counts the mips build_pack_mips() synthesized on top of
+               the pack.cfg levels, which is where "madeira levels=5" came
+               from with a 2-level pack: say which is which */
+            int real = 0;
+            for(int k = 0; k < sh->packs[i].n_lv; k++)
+                if(sh->packs[i].lv[k].real) real++;
+            fprintf(stderr,
+                    "[pack] %-14.14s levels=%d (%d real +%d mip) best=%s step=%g contains=%d area=%g\n",
+                    sh->packs[i].name, sh->packs[i].n_lv, real,
+                    sh->packs[i].n_lv - real,
                     lv ? "yes" : "no", lv ? ldexp(1.0, lv->w_exp) : 0.0,
                     (sh->lon_c >= sh->packs[i].lon0 && sh->lon_c <= sh->packs[i].lon1 &&
                      sh->lat_c <= sh->packs[i].lat0 && sh->lat_c >= sh->packs[i].lat1),
@@ -2155,9 +2163,12 @@ void pda_shell_retheme(void)
 
     for(int i = 0; i < TAB_COUNT - 1; i++) {
         if(!sh->panels[i]) continue;
-        /* chat/radio/other already delete their own root in _destroy():
-           lv_obj_delete() on the same pointer afterwards would free it
-           a second time (use after free) */
+        /* chat/radio/other's _destroy() only cancels animations and drops
+           the pointer - no code path ever deletes those roots, and this
+           loop does not either. That is the known retheme leak (open call
+           in planning.md), not a double-free: adding lv_obj_delete() here
+           or in each _destroy() is the fix under discussion, and only one
+           of the two may ever get it. */
         if(i == 0) { chat_ui_destroy(); sh->panels[i] = NULL; continue; }
         if(i == 2) { radio_ui_destroy(); sh->panels[i] = NULL; continue; }
         /* wallet_ui_destroy() kills the animations and deletes the tree

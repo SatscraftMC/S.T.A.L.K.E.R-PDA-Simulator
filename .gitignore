@@ -10,3 +10,7 @@ tools/__pycache__/
 # (tools/fetch_deps.sh reassembles them).
 assets/maps/madeira-island/z14.rgb565
 assets/maps/funchal/z17.rgb565
+
+# the radio's demo tracks are copyrighted MP3s: the folder ships, the audio
+# is dropped in locally (PDA_MUSIC_ROOT, settings) and is not published.
+music/**/*.mp3

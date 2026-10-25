@@ -56,11 +56,6 @@ wallet_state_t wallet_state(void)
     return s_state;
 }
 
-wallet_backend_t wallet_backend(void)
-{
-    return s_backend;
-}
-
 const char * wallet_backend_name(void)
 {
     return s_name;

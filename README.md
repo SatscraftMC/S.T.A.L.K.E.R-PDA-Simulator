@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.5.2-alpha**
+**v0.5.3-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -23,7 +23,7 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 ## Features
 
 - **Offline map** with real Esri satellite imagery of Madeira, zoom 64–10923 (whole archipelago → ~1 m/px)
-- **27 named places** (Funchal, Curral das Freiras, Pico Ruivo, Paúl da Serra, Porto Santo, Desertas…) drawn in tiers as you zoom
+- **26 named places** (Funchal, Curral das Freiras, Pico Ruivo, Paúl da Serra, Porto Santo, Desertas…) drawn in tiers as you zoom
 - **Four map layers** (Areas, Traders, Stashes, Waypoints) toggled by the strip under the tab bar; blue dot = GPS position
 - **Waypoints & route**: right-click to place/remove; line drawn from position → waypoint → next; auto-removes at 5 m; remembered across restarts; Waypoints layer toggles it; CLEAR button in zoom column
 - **Mouse & player coordinates** in top-right corner
@@ -35,7 +35,7 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **Mesh map** on Other → Connections → Bitchat — this device in center, peers around with names & lines; 5-min peer timeout
 - **Local mesh uses broadcast + direct peer unicast** — subnet sweep finds peers, messages sent directly to known peers (bypasses firewall/AP broadcast drops); discovery row shows subnet
 - **Firewall**: needs UDP 2425 (`sudo ufw allow 2425/udp`); Bitchat page warns when no peers answer
-- **Other tab = control panel** — left column: Settings / Connections / User / Extras; sub-tabs across top; page below
+- **Other tab = control panel** — left column: Settings / Connections / Extras; sub-tabs across top; page below (the User page is one of Settings' sub-tabs)
 - **Connections → Info** shows carrier status (green/grey/red); other pages show each system's settings
 - **Settings → User** holds device name, room, message log switches (all editable, remembered)
 - **Settings pages all work**: General, Advanced, Language (EN/PL), Themes (3 schemes × 3 accents), System
@@ -143,6 +143,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 | `tools/fips_mock.py` | mock fips daemon for testing |
 | `tools/make_screenshots.py` | regenerate docs/screenshots/ |
 | `tools/gen_fonts.sh` | regenerate bitmap fonts (Share Tech Mono, VT323, DSEG7) |
+| `tools/fix_fallback.py` | wire a fallback font into a generated font (Polish coverage) |
 | `tools/fetch_deps.sh` | fetch LVGL + reassemble split map levels |
 
 ## Status

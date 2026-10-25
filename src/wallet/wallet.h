@@ -66,7 +66,6 @@ typedef struct {
 void wallet_init(void);
 
 wallet_state_t wallet_state(void);
-wallet_backend_t wallet_backend(void);
 const char * wallet_backend_name(void);   /* "none" | "mock" | what was asked for */
 const char * wallet_error(void);          /* WALLET_ERROR: what went wrong */
 

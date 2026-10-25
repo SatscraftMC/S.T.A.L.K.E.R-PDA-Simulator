@@ -464,10 +464,12 @@ static void build_unset(lv_obj_t * p)
     center_line(why);
 }
 
-/* a backend is up: the balance screen (today only the mock ever gets here) */
+/* a backend is up: the balance screen (today only the mock ever gets here).
+   The MOCK wording is the preview backend's and nothing else's - it is gated
+   on wallet_is_mock() so a real backend behind the same seam never wears it. */
 static void build_ready(lv_obj_t * p)
 {
-    build_title(p, tr(TR_WALLET_MOCK_BANNER));
+    build_title(p, wallet_is_mock() ? tr(TR_WALLET_MOCK_BANNER) : NULL);
 
     char sats[32], btc[32];
     int64_t bal = wallet_balance_sats();
@@ -489,14 +491,20 @@ static void build_ready(lv_obj_t * p)
     lv_obj_t * k1 = line(p, tr(TR_WALLET_STATE), 250, 184, 70,
                          &pda_font_mono_10, PDA_MSG_SYS);
     lv_obj_set_style_text_align(k1, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    line(p, tr(TR_WALLET_MOCK_STATE), 340, 184, 300,
-         &pda_font_mono_10, PDA_MSG_ACCENT);
+    line(p, wallet_is_mock() ? tr(TR_WALLET_MOCK_STATE)
+                             : wallet_backend_name(),
+         340, 184, 300, &pda_font_mono_10, PDA_MSG_ACCENT);
 
-    lv_obj_t * k2 = line(p, tr(TR_WALLET_NET), 250, 208, 70,
-                         &pda_font_mono_10, PDA_MSG_SYS);
-    lv_obj_set_style_text_align(k2, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    line(p, tr(TR_WALLET_NET_OFF), 340, 208, 300,
-         &pda_font_mono_10, PDA_MSG_TEXT);
+    /* "not connected" is a statement about the preview only - a real
+       backend's link state is its own to report, and there is no call for
+       it in the seam yet, so the row is simply not drawn */
+    if(wallet_is_mock()) {
+        lv_obj_t * k2 = line(p, tr(TR_WALLET_NET), 250, 208, 70,
+                             &pda_font_mono_10, PDA_MSG_SYS);
+        lv_obj_set_style_text_align(k2, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+        line(p, tr(TR_WALLET_NET_OFF), 340, 208, 300,
+             &pda_font_mono_10, PDA_MSG_TEXT);
+    }
 
     /* the actions. Three of them have a screen behind them; SCAN needs the
        camera, which this build does not have, so it says so instead of
@@ -621,7 +629,8 @@ static void apply_request_state(const wallet_invoice_t * inv)
         format_sats(inv->sats, num, sizeof(num));
         snprintf(buf, sizeof(buf), "+ %s %s", num, tr(TR_WALLET_SATS));
         lv_label_set_text(g_wui.paid_amt, buf);
-        lv_label_set_text(g_wui.paid_note, tr(TR_WALLET_PAID_NOTE));
+        lv_label_set_text(g_wui.paid_note,
+                          wallet_is_mock() ? tr(TR_WALLET_PAID_NOTE) : "");
         format_sats(wallet_balance_sats(), num, sizeof(num));
         snprintf(buf, sizeof(buf), "%s %s %s", tr(TR_WALLET_BALANCE),
                  num, tr(TR_WALLET_SATS));
@@ -891,10 +900,12 @@ static void build_sub_title(lv_obj_t * p, tr_id_t title, bool back)
                         &pda_font_mono_16, PDA_MSG_TEXT);
     center_line(t);
 
-    lv_obj_t * b = line(p, tr(TR_WALLET_MOCK_BANNER), 430, 8, 240,
-                        &pda_font_mono_10, PDA_MSG_ACCENT);
-    lv_label_set_long_mode(b, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(b, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    if(wallet_is_mock()) {          /* the preview's banner, and only its */
+        lv_obj_t * b = line(p, tr(TR_WALLET_MOCK_BANNER), 430, 8, 240,
+                            &pda_font_mono_10, PDA_MSG_ACCENT);
+        lv_label_set_long_mode(b, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(b, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    }
 
     if(back)
         live_button(p, tr(TR_WALLET_BACK), BACK_BTN_X, BACK_BTN_Y,
@@ -981,8 +992,9 @@ static void build_request(lv_obj_t * p)
                 on_new_request, NULL, g_wui.group);
 
     grit_rule(p, COL_X, COL_RULE_Y, COL_W, false, PDA_RULE);
-    line_dot(p, tr(TR_WALLET_MOCK_BANNER), COL_X, COL_MOCK_Y, COL_W,
-             &pda_font_mono_10, PDA_MSG_ACCENT);
+    if(wallet_is_mock())
+        line_dot(p, tr(TR_WALLET_MOCK_BANNER), COL_X, COL_MOCK_Y, COL_W,
+                 &pda_font_mono_10, PDA_MSG_ACCENT);
     g_wui.hint = line_dot(p, tr(TR_WALLET_QR_HINT), COL_X, COL_HINT_Y, COL_W,
                           &pda_font_mono_10, PDA_MSG_TIME);
 
@@ -1051,7 +1063,8 @@ static void build_confirm(lv_obj_t * p)
         lv_obj_t * a = line(p, buf, 0, SENT_AMT_Y, BACK_W, &pda_font_mono_14, PDA_TEXT);
         center_line(a);
 
-        lv_obj_t * n = line(p, tr(TR_WALLET_PAID_NOTE), 0, SENT_NOTE_Y, BACK_W,
+        lv_obj_t * n = line(p, wallet_is_mock() ? tr(TR_WALLET_PAID_NOTE) : "",
+                            0, SENT_NOTE_Y, BACK_W,
                             &pda_font_mono_10, PDA_MSG_TIME);
         center_line(n);
 
@@ -1103,8 +1116,9 @@ static void build_confirm(lv_obj_t * p)
     live_button(p, tr(TR_WALLET_PAY), CONF_PAY_X, CONF_BTN_Y, CONF_BTN_W,
                 CONF_BTN_H, on_pay, NULL, g_wui.group);
 
-    line_dot(p, tr(TR_WALLET_MOCK_BANNER), CONF_K_X, CONF_MOCK_Y, SEND_FLD_W,
-             &pda_font_mono_10, PDA_MSG_ACCENT);
+    if(wallet_is_mock())
+        line_dot(p, tr(TR_WALLET_MOCK_BANNER), CONF_K_X, CONF_MOCK_Y, SEND_FLD_W,
+                 &pda_font_mono_10, PDA_MSG_ACCENT);
 }
 
 /* ---------- HISTORY ---------- */
