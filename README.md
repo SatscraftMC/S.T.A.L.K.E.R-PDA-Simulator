@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.7.0-alpha**
+**v0.8.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -71,11 +71,16 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
   icons, like the reference image. Scans a directory for MP3 files and plays
   them via `gst-launch-1.0`. The directory is configurable (`PDA_RADIO_DIR`,
   saved in settings). Auto-advances to the next track when one finishes.
-- **Wallet tab, honest until a backend lands**: no backend is a *not set up*
+- **Wallet tab, two backends behind one seam**: no backend is a *not set up*
   screen, an unknown one is named on an error screen, and the preview backend
   (`PDA_WALLET_BACKEND=mock`) wears a `MOCK - NO REAL MONEY` banner everywhere a
-  balance shows. The real backend (LDK Node / NIP-47 / Cashu, its own spec)
-  plugs into the same `wallet.h` seam without touching the screens.
+  balance shows. The real backend is **NIP-47 NWC**
+  (`PDA_WALLET_BACKEND=nwc`): paste a `nostr+walletconnect://` connection from
+  your own wallet app once on the not-set-up screen, and the same screens talk
+  to the real service over the relay — real BOLT11 invoices, real balance,
+  payments that move the money, a fee line that says the fee is unknown until
+  the payment says otherwise. Both plug into the same `wallet.h` seam without
+  any screen assuming a backend (LDK / Cashu remain LATER candidates).
 - **REQUEST → QR → PAID**: amount keypad + memo, the invoice as a QR code
   (BOLT11, ECC level L, up to version 17), expiry countdown, and the settle
   that flips the screen to PAID and moves the balance. SEND takes an invoice
@@ -179,7 +184,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Status
 
-Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 89 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
+Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — with two backends: the mock that says it is one, and **NIP-47 NWC** against your own wallet service, from `spec-nip47-wallet.md`), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app); a second wallet backend (LDK / NIP-60 Cashu) stays LATER behind the same seam. Extras page empty; partially translated — 91 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
 
 ## License
 

@@ -357,7 +357,7 @@ static void why_line(lv_obj_t * p, const char * txt, int x, int y, int w)
 }
 
 /* a button that works: in the keypad group, accent edge and accent label */
-static void live_button(lv_obj_t * p, const char * txt, int x, int y, int w, int h,
+static lv_obj_t * live_button(lv_obj_t * p, const char * txt, int x, int y, int w, int h,
                         lv_event_cb_t cb, void * user, lv_group_t * group)
 {
     lv_obj_t * b = lv_button_create(p);
@@ -383,6 +383,7 @@ static void live_button(lv_obj_t * p, const char * txt, int x, int y, int w, int
 
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
     if(group) lv_group_add_obj(group, b);
+    return b;
 }
 
 /* a text field: the plate the REQUEST memo wears, for every field here */
@@ -443,28 +444,136 @@ static void rebuild(void)
 
 /* ---------- the three states ---------- */
 
-/* no backend at all - this is what the device honestly is today */
+/* the paste door of the NWC backend: present on the not-set-up screen only
+   while there is no connection (section 7) - the replace semantics under it
+   are built, but v1 reaches the door only from here */
+static bool s_conn_armed = false;      /* [PASTE] first press arms, like [NEW] */
+static bool s_conn_logged = false;     /* boxes printed once, on the first tick */
+static char s_conn_err[192];           /* the last refusal, on the why-line */
+static lv_obj_t * s_conn_ta = NULL;
+static lv_obj_t * s_conn_btn_lbl = NULL;
+static int s_seen_state = -1;          /* the tick's state-change rebuild */
+
+static bool nwc_needing_connection(void)
+{
+    return wallet_state() == WALLET_UNSET &&
+           strcmp(wallet_backend_name(), "nwc") == 0;
+}
+
+static void do_connect(void);
+static void on_conn_click(lv_event_t * e);
+
+/* The paste field's box, printed from the tick (like the Messages compose
+   row in slice C): at panel-create time the shell has not positioned the
+   tab panel yet, so a box measured there lands off by the tab row - the
+   suite clicks what this line says, so it has to be the true box. */
+static void log_paste_boxes(void)
+{
+    if(s_conn_logged || !s_conn_ta) return;
+    s_conn_logged = true;
+
+    lv_obj_update_layout(s_conn_ta);
+    lv_area_t a;
+    lv_obj_get_coords(s_conn_ta, &a);
+    fprintf(stderr, "[wallet] paste field: x=%d y=%d w=%d h=%d placeholder=%s\n",
+            a.x1, a.y1, lv_obj_get_width(s_conn_ta),
+            lv_obj_get_height(s_conn_ta),
+            lv_textarea_get_placeholder_text(s_conn_ta));
+
+    if(s_conn_btn_lbl) {
+        lv_obj_t * btn = lv_obj_get_parent(s_conn_btn_lbl);
+        lv_obj_update_layout(btn);
+        lv_obj_get_coords(btn, &a);
+        fprintf(stderr, "[wallet] paste button: x=%d y=%d w=%d h=%d\n",
+                a.x1, a.y1, lv_obj_get_width(btn), lv_obj_get_height(btn));
+    }
+}
+
+/* no backend at all - this is what the device honestly is today. With
+   PDA_WALLET_BACKEND=nwc and no connection saved, the copy changes with
+   it: the "nothing installed" body and the "later build" why-line would
+   both be false now, so the backend's own reason takes the body slot, the
+   CREATE/RESTORE buttons (NWC has no seed) are hidden, and the paste field
+   takes their row. Everything else on this screen is unchanged. */
 static void build_unset(lv_obj_t * p)
 {
     build_title(p, NULL);
+    s_conn_armed = false;
+    s_conn_logged = false;
+    s_conn_ta = NULL;
+    s_conn_btn_lbl = NULL;
+
+    bool nwc = nwc_needing_connection();
 
     lv_obj_t * h = line(p, tr(TR_WALLET_NOT_SET_UP), 0, 140, BACK_W,
                         &pda_font_mono_16, PDA_MSG_ACCENT);
     center_line(h);
 
-    lv_obj_t * b = line(p, tr(TR_WALLET_NO_BACKEND), 120, 182, 560,
+    const char * body = tr(TR_WALLET_NO_BACKEND);
+    if(nwc && wallet_error()[0]) body = wallet_error();   /* backend English */
+    lv_obj_t * b = line(p, body, 120, 182, 560,
                         &pda_font_mono_14, PDA_TEXT);
     center_block(b);
 
-    dim_button(p, tr(TR_WALLET_CREATE), 236, 262, 156);
-    dim_button(p, tr(TR_WALLET_RESTORE), 408, 262, 156);
+    if(nwc) {
+        /* the field the connection URI is pasted into, where CREATE and
+           RESTORE used to stand - their dimmed row is this backend's row */
+        s_conn_ta = field(p, 170, 262, 440, 32, &pda_font_mono_10, true,
+                          "", 1000);
+        lv_textarea_set_placeholder_text(s_conn_ta, tr(TR_WALLET_CONN_HINT));
 
-    lv_obj_t * why = line(p, tr(TR_WALLET_COMING), 0, 312, BACK_W,
-                          &pda_font_mono_10, PDA_MSG_TIME);
-    center_line(why);
+        lv_obj_t * pb = live_button(p, tr(TR_KEY_PASTE), 620, 262, 120,
+                                    MAIN_BTN_H, on_conn_click, NULL,
+                                    g_wui.group);
+        /* the first press arms it (label flips to SURE?), the second one
+           acts - the User page's [NEW] pattern, so a fat finger does not
+           swap a wallet connection (section 2's confirm lean) */
+        s_conn_btn_lbl = lv_obj_get_child(pb, 0);
+
+        lv_obj_t * why = line(p, s_conn_err, 0, 312, BACK_W,
+                              &pda_font_mono_10,
+                              s_conn_err[0] ? PDA_CARRIER_DOWN : PDA_MSG_TIME);
+        center_line(why);
+    }
+    else {
+        dim_button(p, tr(TR_WALLET_CREATE), 236, 262, 156);
+        dim_button(p, tr(TR_WALLET_RESTORE), 408, 262, 156);
+
+        lv_obj_t * why = line(p, tr(TR_WALLET_COMING), 0, 312, BACK_W,
+                              &pda_font_mono_10, PDA_MSG_TIME);
+        center_line(why);
+    }
 }
 
-/* a backend is up: the balance screen (today only the mock ever gets here).
+/* The paste field's [PASTE]: validate and save through the seam's one URI
+   door (wallet_connect_uri), then show whatever the backend answered - a
+   saved connection re-ran wallet.c's init, so the rebuild shows the real
+   state: READY behind a fetch, or the honest unreachable reason. A refusal
+   wrote nothing and says why on the why-line below. */
+static void do_connect(void)
+{
+    const char * txt = s_conn_ta ? lv_textarea_get_text(s_conn_ta) : "";
+    char err[192];
+    s_conn_err[0] = 0;
+    if(!wallet_connect_uri(txt, err, sizeof(err)))
+        snprintf(s_conn_err, sizeof(s_conn_err), "%s",
+                 err[0] ? err : tr(TR_FAILED));
+    s_conn_armed = false;
+    rebuild();
+}
+
+static void on_conn_click(lv_event_t * e)
+{
+    (void)e;
+    if(!s_conn_armed) {
+        s_conn_armed = true;
+        if(s_conn_btn_lbl) lv_label_set_text(s_conn_btn_lbl, tr(TR_KEY_SURE));
+        return;
+    }
+    do_connect();
+}
+
+/* a backend is up: the balance screen (today the mock or nwc get here).
    The MOCK wording is the preview backend's and nothing else's - it is gated
    on wallet_is_mock() so a real backend behind the same seam never wears it. */
 static void build_ready(lv_obj_t * p)
@@ -699,11 +808,24 @@ static void show_invoice(void)
 }
 
 /* the mock settles on the wall clock, so the panel is polled for it - and
-   it keeps its own time wherever in the tab we happen to be looking */
+   it keeps its own time wherever in the tab we happen to be looking. nwc
+   pumps its in-flight work and cadences from the same pass (wallet_poll),
+   and this is also where a state change swaps the screen: the tick compares
+   wallet_state() each pass and rebuilds only on a change, so the retry path
+   reaching READY (or a transport failure demoting) rebuilds once instead of
+   churning every 250 ms. */
 static void wallet_tick(lv_timer_t * t)
 {
     (void)t;
     wallet_poll();
+    if(getenv("PDA_DEBUG_FIELD")) log_paste_boxes();
+
+    int st = (int)wallet_state();
+    if(st != s_seen_state) {
+        s_seen_state = st;
+        rebuild();
+        return;
+    }
 
     if(s_screen == SCREEN_REQUEST) refresh_request();
     else if(s_screen == SCREEN_HISTORY) refresh_history();
@@ -1058,13 +1180,20 @@ static void build_confirm(lv_obj_t * p)
                             &pda_font_mono_16, PDA_MSG_ACCENT);
         center_line(t);
 
-        format_sats(s_confirm_sats + s_confirm_fee, num, sizeof(num));
+        /* the fee is re-read after PAY, not only cached from CHECK (§6):
+           the mock always knew its 1-sat fee, nwc answers the one the pay
+           response carried - and -1 means no combined total is shown, only
+           the amount actually paid, with the honest note below */
+        int64_t fee = wallet_fee_sats(s_confirm_sats);
+        format_sats(fee >= 0 ? s_confirm_sats + fee : s_confirm_sats,
+                    num, sizeof(num));
         snprintf(buf, sizeof(buf), "- %s %s", num, tr(TR_WALLET_SATS));
         lv_obj_t * a = line(p, buf, 0, SENT_AMT_Y, BACK_W, &pda_font_mono_14, PDA_TEXT);
         center_line(a);
 
-        lv_obj_t * n = line(p, wallet_is_mock() ? tr(TR_WALLET_PAID_NOTE) : "",
-                            0, SENT_NOTE_Y, BACK_W,
+        const char * note = wallet_is_mock() ? tr(TR_WALLET_PAID_NOTE)
+                            : (fee < 0 ? tr(TR_WALLET_FEE_NOTE) : "");
+        lv_obj_t * n = line(p, note, 0, SENT_NOTE_Y, BACK_W,
                             &pda_font_mono_10, PDA_MSG_TIME);
         center_line(n);
 
@@ -1100,9 +1229,18 @@ static void build_confirm(lv_obj_t * p)
 
     line(p, tr(TR_WALLET_FEE), CONF_K_X, CONF_FEE_Y, CONF_K_W,
          &pda_font_mono_10, PDA_MSG_SYS);
-    format_sats(s_confirm_fee, num, sizeof(num));
-    snprintf(buf, sizeof(buf), "%s %s", num, tr(TR_WALLET_SATS));
-    line(p, buf, CONF_V_X, CONF_FEE_Y - 4, CONF_V_W, &pda_font_mono_14, PDA_MSG_TEXT);
+    if(s_confirm_fee < 0) {
+        /* -1 = unknown (the seam's fee contract, section 6): the wallet
+           takes its fee when the payment goes through - honest words where
+           the number would be, never a made-up one */
+        line_dot(p, tr(TR_WALLET_FEE_NOTE), CONF_V_X, CONF_FEE_Y - 4,
+                 CONF_V_W, &pda_font_mono_10, PDA_MSG_TIME);
+    }
+    else {
+        format_sats(s_confirm_fee, num, sizeof(num));
+        snprintf(buf, sizeof(buf), "%s %s", num, tr(TR_WALLET_SATS));
+        line(p, buf, CONF_V_X, CONF_FEE_Y - 4, CONF_V_W, &pda_font_mono_14, PDA_MSG_TEXT);
+    }
 
     grit_rule(p, 6, CONF_RULE2_Y, 788, false, PDA_RULE);
 
@@ -1295,6 +1433,8 @@ static void content_clear(void)
     g_wui.conf_status = NULL;
     g_wui.hist_list = NULL;
     s_hist_top_valid = false;
+    s_conn_ta = NULL;
+    s_conn_btn_lbl = NULL;
 }
 
 lv_obj_t * wallet_ui_create(lv_obj_t * parent, lv_group_t * group)
@@ -1310,6 +1450,7 @@ lv_obj_t * wallet_ui_create(lv_obj_t * parent, lv_group_t * group)
     g_wui.inv_state = -1;
 
     wallet_init();              /* idempotent: the shell calls it too */
+    s_seen_state = (int)wallet_state();   /* the first tick has no change */
 
     lv_obj_t * p = lv_obj_create(parent);
     lv_obj_set_pos(p, 0, 0);
@@ -1349,6 +1490,9 @@ void wallet_ui_destroy(void)
     }
     if(g_wui.qr_px) free(g_wui.qr_px);
     memset(&g_wui, 0, sizeof(g_wui));
+    s_seen_state = -1;          /* a fresh panel re-reads the state */
+    s_conn_err[0] = 0;
+    s_conn_armed = false;
 }
 
 /* ---------- the way in from outside ---------- */

@@ -487,7 +487,7 @@ def type_text(s):
     NAMES = {" ": "space", "/": "slash", ":": "colon", ".": "period",
              "-": "minus", "_": "underscore", "@": "at", "=": "equal",
              "+": "plus", "?": "question", ",": "comma", "%": "percent",
-             "'": "apostrophe", '"': "quotedbl"}
+             "'": "apostrophe", '"': "quotedbl", "&": "ampersand"}
     d = display.Display()
     shift = d.keysym_to_keycode(XK.string_to_keysym("Shift_L"))
     for ch in s:
@@ -2505,6 +2505,299 @@ def test_url_forms():
     stop_relay(relay)
 
 
+def test_nwc():
+    """25. the NIP-47 wallet backend, no service needed (spec-nip47-wallet
+    test plan 1-4 and 7): the paste door, the saved connection, the honest
+    not-connected / unreachable faces, the source rules that keep the wallet
+    away from transport and away from the device key, and the mock-wording
+    gates (plan 10's grep half - the service half lives in nwc_live)."""
+    print("25. the NIP-47 wallet backend (no service)", flush=True)
+
+    # a config dir of our own: wallet.nwc and wallet.nwc.state land next to
+    # prefs.conf, isolated like every other run (the global PDA_PREFS rule)
+    cfg = os.path.join(LOGDIR, "nwc")
+    shutil.rmtree(cfg, ignore_errors=True)
+    os.makedirs(cfg)
+    prefs = os.path.join(cfg, "prefs.conf")
+    conn = os.path.join(cfg, "wallet.nwc")
+    state = os.path.join(cfg, "wallet.nwc.state")
+
+    # well-formed, relay on a closed port: every face below answers without
+    # any wallet service (plan 1 and 3). The wallet key is G's x-only point,
+    # the secret is the test's own - neither is key material in the repo's
+    # source (they live in this test file, and never in a committed app).
+    URI = ("nostr+walletconnect://"
+           "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+           "?relay=ws%3A%2F%2F127.0.0.1%3A9"
+           "&secret=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    SECRET = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    logs = []
+
+    def boot(extra, name):
+        env = {"PDA_PREFS": prefs, "PDA_START_TAB": "5", "PDA_DEBUG": "1",
+               "PDA_DEBUG_FIELD": "1", "PDA_BIT_SCAN": "off",
+               "PDA_WALLET_BACKEND": "nwc"}
+        env.update(extra)
+        proc, fh, logpath = start(env, name)
+        logs.append(logpath)
+        return proc, fh, logpath
+
+    def paste_boxes(logpath):
+        data = _read(logpath)
+        fb = re.findall(r"\[wallet\] paste field: x=(\d+) y=(\d+) "
+                        r"w=(\d+) h=(\d+)", data)
+        bb = re.findall(r"\[wallet\] paste button: x=(\d+) y=(\d+) "
+                        r"w=(\d+) h=(\d+)", data)
+        return (tuple(map(int, fb[-1])) if fb else None,
+                tuple(map(int, bb[-1])) if bb else None)
+
+    # ---- no connection: the reason, the field, the button ----
+    p, f, logpath = boot({}, "nwc_unset")
+    try:
+        data = wait_for_log(logpath, r"paste field", 10)
+        note("no wallet connection saved - paste one from your wallet app" in data,
+             "no connection: the not-set-up reason names what is missing")
+        note(lit_pixels(shot("nwc_unset"), y0=69) > 20,
+             "the not-set-up screen renders")
+        fbox, bbox = paste_boxes(logpath)
+        note(fbox is not None and bbox is not None,
+             "the [PASTE CONNECTION] field and its button are up")
+        if fbox is None or bbox is None:
+            stop(p, f)
+            return
+
+        # ---- paste a good URI: two presses, one atomic 0600 file ----
+        click_once(fbox[0] + fbox[2] // 2, fbox[1] + fbox[3] // 2)
+        time.sleep(0.4)
+        type_text(URI)
+        time.sleep(0.6)
+        click_once(bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2)   # arms
+        time.sleep(0.5)
+        click_once(bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2)   # accepts
+        data = wait_for_log(logpath, r"could not reach", 20)
+
+        note(os.path.exists(conn), "a pasted connection is saved")
+        if os.path.exists(conn):
+            mode = os.stat(conn).st_mode & 0o777
+            note(mode == 0o600, "saved 0600 (%o)" % mode)
+            note(open(conn).read().strip() == URI,
+                 "the saved line is the URI itself, byte for byte")
+        note("nwc cipher selftest ok" in data,
+             "the cipher self-check ran before any network")
+        note("could not reach 127.0.0.1:9 - the wallet will retry" in data,
+             "an unreachable relay is the honest error reason")
+        note(app_alive(p, logpath), "the app is alive with an unreachable relay")
+    finally:
+        stop(p, f)
+
+    # ---- the saved connection loads after a restart, and its state file
+    #      is not clobbered by a boot that never reached the service ----
+    with open(state, "w") as fh:
+        fh.write("balance = 42\n")
+    p, f, logpath = boot({}, "nwc_reload")
+    try:
+        data = wait_for_log(logpath, r"could not reach", 20)
+        note("could not reach 127.0.0.1:9" in data,
+             "the saved connection is loaded after a restart")
+        note("nwc cipher selftest ok" in data,
+             "and the self-check passes on the reload")
+        note(open(state).read() == "balance = 42\n",
+             "a boot that never reached the service leaves the state file alone")
+        note(app_alive(p, logpath), "the app is alive on the reload")
+    finally:
+        stop(p, f)
+
+    # ---- a refused paste: the honest reason, and nothing written ----
+    os.unlink(conn)
+    p, f, logpath = boot({}, "nwc_refuse")
+    try:
+        wait_for_log(logpath, r"paste field", 10)
+        fbox, bbox = paste_boxes(logpath)
+        note(fbox is not None and bbox is not None, "the paste field is up again")
+        if fbox and bbox:
+            click_once(fbox[0] + fbox[2] // 2, fbox[1] + fbox[3] // 2)
+            time.sleep(0.4)
+            type_text("not a connection at all")
+            time.sleep(0.6)
+            click_once(bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2)
+            time.sleep(0.5)
+            click_once(bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2)
+            data = wait_for_log(logpath, r"connect refused", 10)
+            note("connect refused: not a wallet connection URI "
+                 "(expected nostr+walletconnect://)" in data,
+                 "a bad URI is refused with the honest reason")
+            note(not os.path.exists(conn), "and a refusal writes nothing")
+            note(app_alive(p, logpath), "the app is alive after a refused paste")
+    finally:
+        stop(p, f)
+
+    # ---- a garbage connection file: error, app alive, file not clobbered ----
+    with open(conn, "w") as fh:
+        fh.write("garbage in a file\n")
+    p, f, logpath = boot({}, "nwc_garbage")
+    try:
+        data = wait_for_log(logpath, r"\[wallet\] error:", 10)
+        note("error: not a wallet connection URI "
+             "(expected nostr+walletconnect://)" in data,
+             "a garbage file reaches the error screen with its reason")
+        note(open(conn).read() == "garbage in a file\n",
+             "the unreadable file was not clobbered")
+        note(app_alive(p, logpath), "the app is alive with a garbage file")
+    finally:
+        stop(p, f)
+        os.unlink(conn)
+
+    # ---- the unknown-backend string names both real backends now ----
+    p, f, logpath = boot({"PDA_WALLET_BACKEND": "lightningd"}, "nwc_unknown")
+    try:
+        data = wait_for_log(logpath, r"unknown wallet backend", 10)
+        note("this build has: mock, nwc" in data,
+             "the unknown-backend string names mock, nwc")
+    finally:
+        stop(p, f)
+
+    # ---- source rules: transport stays out, the device key stays out ----
+    wsrc = ""
+    wdir = os.path.join(ROOT, "src", "wallet")
+    for name in sorted(os.listdir(wdir)):
+        if name.endswith((".c", ".h")):
+            wsrc += _read(os.path.join(wdir, name))
+    note(not re.search(r"\bsocket\(|\bconnect\(|AF_INET|SSL_|TLS", wsrc),
+         "no transport calls anywhere in src/wallet/ (spec section 4)")
+    note("identity.nsec" not in wsrc and "identity_nsec(" not in wsrc,
+         "src/wallet/ never touches the device key (slice A's rule)")
+
+    # ---- plan 10's grep: every mock-only word is behind wallet_is_mock() ----
+    uisrc = _read(os.path.join(ROOT, "src", "ui", "wallet_ui.c"))
+    lines = uisrc.split("\n")
+    ungated = []
+    for i, ln in enumerate(lines):
+        if not re.search(r"tr\(TR_WALLET_MOCK|tr\(TR_WALLET_NET|"
+                         r"TR_WALLET_PAID_NOTE", ln):
+            continue
+        window = "\n".join(lines[max(0, i - 5):i + 1])
+        if "wallet_is_mock()" not in window:
+            ungated.append(f"{i + 1}: {ln.strip()[:60]}")
+    note(not ungated,
+         "every mock-only string is still gated on wallet_is_mock() "
+         f"({ungated or 'all gated'})")
+
+    # ---- secret hygiene: the URI and its secret reach no log (plan 4) ----
+    leaked = []
+    for lp in logs:
+        d = _read(lp)
+        if SECRET in d:
+            leaked.append(os.path.basename(lp) + " (secret)")
+        if URI in d:
+            leaked.append(os.path.basename(lp) + " (uri)")
+        if cfg in d:
+            leaked.append(os.path.basename(lp) + " (config dir)")
+    note(not leaked,
+         "the secret, the URI and the config dir appear in no log "
+         f"({leaked or 'clean'})")
+
+
+def test_nwc_live():
+    """26. the live check against the user's own wallet service
+    (spec-nip47-wallet test plan 5, 6 and 10) - NEEDS .keys. Always
+    registered, gated on PDA_NWC_LIVE=1: unset means an explicit skip line,
+    set with no credential means a loud failure (a missing credential must
+    never read as a green run). The app itself never reads .keys - this
+    harness writes the URI into the isolated config dir, exactly where a
+    paste would put it."""
+    print("26. live NWC against the real connection", flush=True)
+
+    if os.environ.get("PDA_NWC_LIVE") != "1":
+        print("    nwc_live SKIPPED - set PDA_NWC_LIVE=1 and provide .keys "
+              "to run it", flush=True)
+        return
+
+    uri = os.environ.get("PDA_NWC_URI", "").strip()
+    if not uri:
+        keys = os.path.join(ROOT, ".keys")
+        if os.path.exists(keys):
+            uri = open(keys).read().strip()
+    if not uri:
+        FAIL.append("nwc_live: PDA_NWC_LIVE=1 but no credential "
+                    "(app/.keys or PDA_NWC_URI)")
+        print("  FAIL  nwc_live needs a credential: put the Alby export in "
+              "app/.keys or set PDA_NWC_URI", flush=True)
+        return
+
+    cfg = os.path.join(LOGDIR, "nwc_live")
+    shutil.rmtree(cfg, ignore_errors=True)
+    os.makedirs(cfg)
+    conn = os.path.join(cfg, "wallet.nwc")
+    with open(conn, "w") as fh:
+        fh.write(uri + "\n")
+    os.chmod(conn, 0o600)
+    prefs = os.path.join(cfg, "prefs.conf")
+
+    env = {"PDA_PREFS": prefs, "PDA_START_TAB": "5", "PDA_DEBUG": "1",
+           "PDA_DEBUG_FIELD": "1", "PDA_BIT_SCAN": "off",
+           "PDA_WALLET_BACKEND": "nwc"}
+    p, f, logpath = start(env, "nwc_live")
+    try:
+        # READY means the first fetch landed (spec section 6)
+        data = wait_for_log(logpath, r"\[wallet\] nwc balance: ", 45)
+        m = re.search(r"\[wallet\] nwc balance: (-?\d+) sats", data)
+        note(m is not None,
+             "get_balance answered with a real number"
+             + (f" ({m.group(1)} sats - compare it with your wallet app's "
+                "own display)" if m else ""))
+        note("[wallet] error:" not in data,
+             "the wallet came up READY (no error reason)")
+
+        # REQUEST -> a real bolt11, and the QR on screen is exactly it
+        time.sleep(3.0)                      # first paint after the fetch
+        click_once(142, 390)                 # the REQUEST button
+        data = wait_for_log(logpath, r"\[wallet\] invoice: lnbc", 20)
+        inv = last_invoice(logpath)
+        note(inv is not None and inv.startswith("lnbc"),
+             "make_invoice returned a real bolt11")
+        path = shot("nwc_live_req")
+        qr = decode_qr(path)
+        note(qr is not None and inv is not None and qr == inv,
+             "the QR on the screen decodes back to exactly that invoice")
+
+        print("    MANUAL: pay this invoice with your phone wallet now "
+              "(waiting up to 3 minutes for the service's answer)...",
+              flush=True)
+        data = wait_for_log(logpath, r"\[wallet\] nwc invoice paid", 180)
+        paid = "[wallet] nwc invoice paid" in data
+        note(paid,
+             "lookup_invoice heard the payment (plan 6's PAID half)")
+        if paid:
+            rows = [ln for ln in open(os.path.join(cfg, "wallet.nwc.state"))
+                    if ln.startswith("history = ")]
+            note(any("|in|" in ln and "|paid|" in ln for ln in rows),
+                 "the paid row is on disk")
+            note(any(ln.startswith("balance = ") for ln in
+                     open(os.path.join(cfg, "wallet.nwc.state"))),
+                 "and the fetched balance is on disk too")
+
+            # the row must survive a restart (plan 6's resume half)
+            stop(p, f)
+            p, f, logpath = start(env, "nwc_live2")
+            data = wait_for_log(logpath, r"\[wallet\] nwc balance: ", 45)
+            rows = [ln for ln in open(os.path.join(cfg, "wallet.nwc.state"))
+                    if ln.startswith("history = ")]
+            note(any("|in|" in ln and "|paid|" in ln for ln in rows),
+                 "the paid row survived the restart")
+            note("[wallet] invoice:" not in data,
+                 "the settled invoice's line is gone (one-shot rule)")
+
+        print("    MANUAL, not asserted here (spec test plan 6): SEND a real "
+              "tiny invoice and check the balance down + the out row; an "
+              "untouched invoice's EXPIRED row; URI replace semantics; the "
+              "CONFIRM fee note and the SENT face with a real fee; and the "
+              "mid-session relay-death face then its retry back to READY.",
+              flush=True)
+        note(app_alive(p, logpath), "the app is alive on the live connection")
+    finally:
+        stop(p, f)
+
+
 def test_docs():
     print("18. i18n parity and the doc claims this build touched", flush=True)
     # every TR_ id in the enum has an EN and a PL entry
@@ -2573,6 +2866,8 @@ TESTS = {
     "waypoints": test_waypoints,
     "mesh": test_mesh_map,
     "wallet": test_wallet,
+    "nwc": test_nwc,
+    "nwc_live": test_nwc_live,
     "trust": test_trust,
     "keys": test_key_actions,
     "docs": test_docs,

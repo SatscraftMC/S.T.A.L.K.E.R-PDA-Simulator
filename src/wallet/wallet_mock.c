@@ -1,4 +1,5 @@
 #include "wallet/wallet.h"
+#include "wallet/wallet_bolt11.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -32,8 +33,7 @@
 #define MOCK_SETTLE_SECS   8      /* s: when the preview pretends it was paid */
 #define MOCK_PAYLOAD_LEN   160    /* filler after the bolt11 tag */
 #define MOCK_HIST_MAX      64
-#define MOCK_FEE_SATS      1      /* what sending costs, on top of the amount */
-#define MOCK_MAX_SATS      2100000000000000LL   /* 21 000 000 BTC, all of it */
+#define MOCK_FEE_SATS      1    /* what sending costs, on top of the amount */
 
 static int64_t s_balance = MOCK_DEFAULT_SATS;
 static char s_path[512];
@@ -377,156 +377,17 @@ void wallet_mock_poll(void)
 
 /* ---------- paying ---------- */
 
-/* mant * 10^exp10 -> whole sats. exp10 runs from -16 to 8 for anything a
- * bolt11 amount can say, so the multiply side is the one that can run away
- * and it is capped before it gets near unsigned long long. */
-static bool mant_to_sats(unsigned long long mant, int exp10, int64_t * out)
-{
-    if(exp10 >= 0) {
-        for(int i = 0; i < exp10; i++) {
-            if(mant > (unsigned long long)(MOCK_MAX_SATS / 10)) return false;
-            mant *= 10;
-        }
-        *out = (int64_t)mant;
-        return true;
-    }
-
-    unsigned long long div = 1;
-    for(int i = 0; i < -exp10; i++) div *= 10;   /* 10^16 at most: it fits */
-    unsigned long long q = mant / div;
-    if((mant % div) * 2 >= div) q++;             /* round half up */
-    if(q > (unsigned long long)MOCK_MAX_SATS) return false;
-    *out = (int64_t)q;
-    return true;
-}
-
 /* what an invoice is asking for.
  *
- * A bolt11 is "<hrp>1<data>": a human readable part, the *last* '1' in the
- * string, then bech32 data - which never holds a '1' of its own, so the
- * separator cannot be confused with one. The hrp is the currency
- * (lnbc/lntb/lnbcrt) followed by the amount: digits, an optional fraction,
- * and the unit - nothing for BTC, m, u, n (nano) or p (pico).
- *
- * Blanks and line breaks are dropped first: what comes out of a paste is
- * not always one clean line. */
+ * The reader itself moved to wallet_bolt11.c - both backends call the same
+ * one, so the same invoice answers the same sats and the same refusal
+ * strings whichever backend is behind the seam (spec-nip47-wallet.md
+ * section 6). The mock's make -> check round trip must not move: this is a
+ * rename of the door, not of the answer. */
 bool wallet_mock_check(const char * bolt11, int64_t * sats_out,
                        char * err, size_t err_n)
 {
-    if(sats_out) *sats_out = 0;
-
-    char clean[640];
-    size_t n = 0;
-    for(const char * c = bolt11 ? bolt11 : ""; *c && n + 1 < sizeof(clean); c++) {
-        if(isspace((unsigned char)*c)) continue;
-        clean[n++] = *c;
-    }
-    clean[n] = 0;
-
-    if(!n) {
-        if(err && err_n) snprintf(err, err_n, "%s", "there is no invoice in the field");
-        return false;
-    }
-
-    const char * sep = NULL;
-    for(const char * c = clean; *c; c++) if(*c == '1') sep = c;
-    if(!sep) {
-        if(err && err_n) snprintf(err, err_n, "%s", "that is not a bolt11 invoice");
-        return false;
-    }
-
-    size_t hrp_len = (size_t)(sep - clean);
-    size_t data_len = n - hrp_len - 1;
-    if(data_len < 8) {                      /* bech32 data is never this short */
-        if(err && err_n) snprintf(err, err_n, "%s", "that is not a bolt11 invoice");
-        return false;
-    }
-
-    size_t pre;
-    if(hrp_len >= 6 && strncasecmp(clean, "lnbcrt", 6) == 0) pre = 6;
-    else if(hrp_len >= 4 && strncasecmp(clean, "lnbc", 4) == 0) pre = 4;
-    else if(hrp_len >= 4 && strncasecmp(clean, "lntb", 4) == 0) pre = 4;
-    else {
-        if(err && err_n) snprintf(err, err_n, "%s", "that is not a bolt11 invoice");
-        return false;
-    }
-
-    const char * a = clean + pre;
-    size_t alen = hrp_len - pre;
-    if(!alen) {
-        if(err && err_n) snprintf(err, err_n, "%s",
-                                   "that invoice does not say how much to pay");
-        return false;
-    }
-
-    unsigned long long mant = 0;
-    int nsig = 0;                 /* digits actually kept */
-    int nf = 0;                   /* ...of which the fraction's */
-    int mult_exp = 0;             /* value = mant / 10^nf / 10^mult_exp BTC */
-    bool digits = false, dot = false;
-
-    size_t i = 0;
-    for(; i < alen; i++) {
-        char c = a[i];
-        if(c == '.') {
-            if(dot) break;
-            dot = true;
-            continue;
-        }
-        if(c < '0' || c > '9') break;
-        digits = true;
-        if(dot) {
-            if(nsig < 18 && nf < 12) { mant = mant * 10 + (unsigned)(c - '0'); nf++; nsig++; }
-        }
-        else {
-            if(nsig >= 18) {                 /* more than any wallet holds */
-                if(err && err_n) snprintf(err, err_n,
-                                          "%s", "that invoice asks for more than any wallet holds");
-                return false;
-            }
-            mant = mant * 10 + (unsigned)(c - '0');
-            nsig++;
-        }
-    }
-
-    if(!digits) {
-        if(err && err_n) snprintf(err, err_n, "%s",
-                                   "that invoice does not say how much to pay");
-        return false;
-    }
-
-    if(i < alen) {
-        char u = (char)tolower((unsigned char)a[i]);
-        if(u == 'm') mult_exp = 3;
-        else if(u == 'u') mult_exp = 6;
-        else if(u == 'n') mult_exp = 9;
-        else if(u == 'p') mult_exp = 12;
-        else {
-            if(err && err_n) snprintf(err, err_n, "%s", "that is not a bolt11 invoice");
-            return false;
-        }
-        i++;
-    }
-    if(i != alen) {
-        if(err && err_n) snprintf(err, err_n, "%s", "that is not a bolt11 invoice");
-        return false;
-    }
-
-    /* sats = mant * 10^-nf * 10^-mult_exp * 10^8 */
-    int64_t sats = 0;
-    if(!mant_to_sats(mant, 8 - nf - mult_exp, &sats)) {
-        if(err && err_n) snprintf(err, err_n, "%s",
-                                   "that invoice asks for more than any wallet holds");
-        return false;
-    }
-    if(sats < 1) {
-        if(err && err_n) snprintf(err, err_n, "%s",
-                                   "that invoice is for less than one sat");
-        return false;
-    }
-
-    if(sats_out) *sats_out = sats;
-    return true;
+    return bolt11_parse(bolt11, sats_out, err, err_n);
 }
 
 int64_t wallet_mock_fee(int64_t sats)

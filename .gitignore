@@ -14,3 +14,8 @@ assets/maps/funchal/z17.rgb565
 # the radio's demo tracks are copyrighted MP3s: the folder ships, the audio
 # is dropped in locally (PDA_MUSIC_ROOT, settings) and is not published.
 music/**/*.mp3
+
+# the live NWC test's credential (the user's Alby export URI): harness-only,
+# never read by the app, deleted with its STATUS.md Blockers line when the
+# live testing is done
+.keys
