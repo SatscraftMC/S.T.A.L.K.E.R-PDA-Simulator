@@ -25,8 +25,8 @@
  * the compose row at the bottom of it.
  *
  *   +-------------------------------------------------------------+
- *   | SECTOR   mesh 2425 / relay 1.2.3.4:7788  SEND ON (BIT) (F) |
- *   |                                            BIT  FIPS  NET  |
+ *   | SECTOR   mesh 2425 / relay.example.com  SEND ON (BIT) (F)   |
+ *   |                                            BIT  FIPS  NSTR  |
  *   +-------------------------------------------------------------+
  *   | 12:05  ME       not yet, rain again                        |
  *   | 12:04  ROOK     anyone got the drop coords?                 |
@@ -71,6 +71,7 @@ typedef struct {
     lv_obj_t * pick_disc[CHAT_TRANSPORT_MAX];
     uint32_t pick_buf[CHAT_TRANSPORT_MAX][DISC_N * DISC_N];
     lv_obj_t * input;
+    lv_obj_t * send_btn;
     lv_timer_t * timer;
     int rendered;         /* messages already drawn */
     int rows;              /* rows currently in the list */
@@ -87,6 +88,31 @@ static void chat_tick(lv_timer_t * timer);
 static void refresh(void);
 static void rebuild(void);
 static void scroll_to_top(void);
+
+/* PDA_DEBUG_FIELD: the absolute box of one compose-row object, the same
+   hook the Other tab's rows print. Measured, not assumed - the frame these
+   sit in adds its own border, so source constants are one pixel-cluster
+   away from where a click has to land. Printed on the first tick, not at
+   create(): the shell has only then finished putting the tab panel under
+   the tab bar, and a box read earlier is that many pixels low. */
+static void debug_field(const char * name, lv_obj_t * o)
+{
+    if(!o || !getenv("PDA_DEBUG_FIELD")) return;
+    lv_obj_update_layout(o);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    fprintf(stderr, "[field] chat: %s x=%d y=%d w=%d h=%d\n",
+            name, a.x1, a.y1, lv_obj_get_width(o), lv_obj_get_height(o));
+}
+
+static void debug_fields_once(void)
+{
+    static bool done = false;
+    if(done || !getenv("PDA_DEBUG_FIELD")) return;
+    done = true;
+    debug_field("input", g_ui.input);
+    debug_field("send", g_ui.send_btn);
+}
 
 /* the panel is rebuilt when the theme changes: the old timer has to go */
 void chat_ui_destroy(void)
@@ -385,6 +411,7 @@ static void refresh(void)
 static void chat_tick(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
+    debug_fields_once();
     chat_poll();
 
     /* Trust/REMOVE in the Contacts tab changed the trust list: the rows
@@ -477,6 +504,19 @@ static void pick_key(int idx, char * out, size_t outn)
     for(char * p = tag; *p; p++)
         if(*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
     snprintf(out, outn, "send_%s", tag);
+}
+
+/* what that setting says right now. The internet carrier's key moved with
+   its rename (NET -> nstr, so "send_net" -> "send_nstr"): a saved "send_net
+   = 0" still holds this carrier off when "send_nstr" is absent - one line
+   of fallback, no migration pass over the file. */
+static bool pick_on(int idx)
+{
+    char key[24];
+    pick_key(idx, key, sizeof(key));
+    if(!prefs_str(key, NULL) && strcmp(key, "send_nstr") == 0)
+        return prefs_bool("send_net", true);
+    return prefs_bool(key, true);
 }
 
 /* the buttons: the disc says whether the carrier is used and the tag is
@@ -583,9 +623,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     /* which carriers a message goes out on - the setting is remembered */
     int ntr = chat_transport_count();
     for(int i = 0; i < ntr && i < CHAT_TRANSPORT_MAX; i++) {
-        char key[24];
-        pick_key(i, key, sizeof(key));
-        chat_set_carrier_enabled(i, prefs_bool(key, true));
+        chat_set_carrier_enabled(i, pick_on(i));
     }
 
     lv_obj_t * root = lv_obj_create(parent);
@@ -743,5 +781,7 @@ lv_obj_t * chat_ui_create(lv_obj_t * parent, lv_group_t * group)
     int poll = atoi(prefs_str("log_poll", "200"));
     if(poll < 50) poll = 200;
     g_ui.timer = lv_timer_create(chat_tick, poll, NULL);
+
+    g_ui.send_btn = send;
     return root;
 }

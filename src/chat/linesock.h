@@ -4,10 +4,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* A tiny line-oriented socket helper: the carriers that speak the JSON
-   envelope over a stream socket (the relay, the bitchat bridge) all need the
-   same three things - accumulate bytes until a newline, hand out one line at
-   a time, and write a line without caring about partial writes. */
+/* A tiny line-oriented socket helper: the carrier that still speaks the JSON
+   envelope over a stream socket (the bitchat bridge) needs the same three
+   things - accumulate bytes until a newline, hand out one line at a time, and
+   write a line without caring about partial writes. The relay carrier does
+   NOT use this any more: one WebSocket message is one NIP-01 array, so there
+   are no line delimiters on that path. */
 
 #define LS_BUF 4096
 

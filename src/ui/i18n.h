@@ -93,6 +93,7 @@ typedef enum {
     TR_KEY_SURE,
     TR_KEY_PASTE,
     TR_KEY_PASTE_HINT,
+    TR_RELAY,
     TR_COUNT
 } tr_id_t;
 

@@ -3,10 +3,11 @@
 
 Drives the real app and checks the real carriers:
 
-  NET  a relay (tools/relay.py) carries a message between the app and
-       another client, and the app's own message travels the other way
-  BIT  the local mesh: a second instance of the app on the same host picks
-       up what the first one broadcasts on port 2425
+  NSTR  a local nostr relay (tools/nstr_relay.py) over WebSocket carries a
+        message between the app and another client speaking
+        tools/wsclient.py, and the app's own message travels the other way
+  BIT   the local mesh: a second instance of the app on the same host picks
+        up what the first one broadcasts on port 2425
 
 The app is started with PDA_START_TAB=1 (the Messages tab) and PDA_DEBUG=1,
 so the test can read what happened from its log. Screenshots are taken of the
@@ -16,8 +17,9 @@ prove the message really landed on the screen.
 It also runs the identity checks of spec-nostr-identity: the NIST sha256
 vectors from the [id] selftest line, a signed round trip between two app
 instances (with an emoji over the relay, which regression-guards the
-surrogate-pair fix), the forgery cases, and at the end a grep proving no
-key file's contents ever reached a log.
+surrogate-pair fix), the forgery cases, the relay path's room scoping (the
+#t filter and the carrier's backstop), and at the end a grep proving no key
+file's contents ever reached a log.
 """
 import atexit
 import hashlib
@@ -42,7 +44,10 @@ os.environ.setdefault("PDA_PREFS", os.path.join(RUN_TMP, "prefs.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
-RELAY = os.path.join(ROOT, "tools", "relay.py")
+RELAY = os.path.join(ROOT, "tools", "nstr_relay.py")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from wsclient import WSClient                      # noqa: E402  (ROOT first)
+
 SHOT = "/tmp/opencode/chat"
 LOGDIR = "/tmp/opencode"
 
@@ -61,6 +66,67 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def relay_url(port):
+    return f"ws://127.0.0.1:{port}"
+
+
+def start_relay(port, name):
+    """the local WebSocket relay, on stdin so a test can drive its control
+    plane (okfalse / closed / raw / ping / fragment / oversize / pause)"""
+    logpath = os.path.join(LOGDIR, f"chat_{name}_relay.log")
+    p = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
+                          "--port", str(port), "-v"],
+                         stdin=subprocess.PIPE,
+                         stdout=open(logpath, "w"),
+                         stderr=subprocess.STDOUT, text=True)
+    time.sleep(1.0)
+    return p, logpath
+
+
+def stop_relay(p):
+    try:
+        if p.stdin:
+            p.stdin.close()
+    except OSError:
+        pass
+    p.terminate()
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+
+
+def peer_connect(port, sub="peer"):
+    """the test peer: a second WebSocket client on the same relay, with a
+    subscription that takes every kind-1 event (no #t, so it sees what the
+    relay has - including what it filters away from the app's subscription)"""
+    w = WSClient(relay_url(port), timeout=5)
+    w.send(json.dumps(["REQ", sub, {"kinds": [1]}]))
+    return w
+
+
+def peer_event(w, contains=None, timeout=8):
+    """the next EVENT off the peer (the one whose content contains
+    `contains`, or any of them). None when nothing arrived in time."""
+    end = time.time() + timeout
+    while time.time() < end:
+        msg = w.recv(timeout=max(0.2, end - time.time()))
+        if not msg:
+            continue
+        try:
+            arr = json.loads(msg)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(arr, list) or len(arr) < 3 or arr[0] != "EVENT":
+            continue
+        ev = arr[2]
+        if not isinstance(ev, dict) or ev.get("kind") != 1:
+            continue
+        if contains is None or contains in (ev.get("content") or ""):
+            return ev
+    return None
 
 
 INSTANCE_DIRS = []      # every one, for the no-key-in-the-logs grep
@@ -130,9 +196,11 @@ def light_pixels(path, y0, y1):
 def unsigned_event(text, name, room="SECTOR", ts=None):
     """the one unsigned shape of spec-nostr-identity §4: pubkey "", no sig,
     id = sha256 of the canonical serialization (hashing needs no key - the
-    tests hold no key, and that is exactly the honest CHAT_SIG_NONE path)"""
+    tests hold no key, and that is exactly the honest CHAT_SIG_NONE path).
+    The `t` tag mirrors `room` (spec-nstr-relay §6): it is the key the
+    relay's #t filter indexes, so an event without it never reaches the app."""
     ts = int(ts if ts is not None else time.time())
-    tags = [["room", room], ["name", name]]
+    tags = [["room", room], ["t", room], ["name", name]]
     ser = json.dumps([0, "", ts, 1, tags, text],
                      separators=(",", ":"), ensure_ascii=False)
     eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
@@ -211,35 +279,32 @@ def wait_for_log(path, pattern, timeout=12):
         return ""
 
 
-def test_net(port):
-    print("NET - the relay", flush=True)
-    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
-                              "--port", str(port), "-v"],
-                             stdout=open(os.path.join(LOGDIR, "chat_relay.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
-    peer.settimeout(0.5)
+def test_nstr(port):
+    print("NSTR - the relay over WebSocket", flush=True)
+    relay, rlog = start_relay(port, "net")
+    peer = peer_connect(port)
 
     app, applog, log_a = start_app("a", {
-        "PDA_RELAY_HOST": "127.0.0.1",
-        "PDA_RELAY_PORT": str(port),
+        "PDA_NSTR_RELAY": relay_url(port),
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_NAME": "Satscraft",
         "PDA_TEST_SEND": "anyone got the drop coords",
+        "PDA_TEST_SEND_IN": "5",
     })
     try:
-        time.sleep(3.0)
+        data = wait_for_log(log_a, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier came up on the local relay")
         note(True, f"app booted ({os.path.getsize(log_a)} bytes of log)")
 
         before = shot("before")
         # the unsigned event with a name tag: a test holds no key, so this
         # is the honest CHAT_SIG_NONE path the receiver must still display
-        peer.sendall((json.dumps(unsigned_event(
-            "anyone got the drop coords", "ROOK")) + "\n").encode())
-        data = wait_for_log(log_a, r"\[chat\] recv via NET from ROOK", 10)
-        note("recv via NET from ROOK" in data, "the app received the peer's message")
+        peer.send(json.dumps(["EVENT", unsigned_event(
+            "anyone got the drop coords", "ROOK")]))
+        data = wait_for_log(log_a, r"\[chat\] recv via NSTR from ROOK", 10)
+        note("recv via NSTR from ROOK" in data,
+             "the app received the peer's message over the relay")
 
         time.sleep(1.0)
         after = shot("after")
@@ -251,37 +316,20 @@ def test_net(port):
             note(False, "could not measure the screen (no PIL?)")
 
         # the app's own message must reach the relay
-        peer.settimeout(6)
-        got = None
-        end = time.time() + 6
-        while time.time() < end and not got:
-            try:
-                line = peer.recv(4096)
-            except socket.timeout:
-                continue
-            for l in line.decode("utf-8", "replace").splitlines():
-                if not l.strip():
-                    continue
-                try:
-                    m = json.loads(l)
-                except json.JSONDecodeError:
-                    continue
-                if m.get("kind") == 1 and m.get("content"):
-                    got = m
+        got = peer_event(peer, contains="anyone got the drop coords", timeout=10)
         note(got is not None, "the app's own message reached the relay")
         if got:
             who = name_of(got)
             note(who == "Satscraft", f"the relay sees the sender ({who})")
             note(got.get("pubkey") and len(got.get("sig", "")) == 128,
                  "the message went out signed (pubkey + 128-hex sig)")
+        with open(rlog) as f:
+            rlog_txt = f.read()
+        note("bad line" not in rlog_txt, "the relay never saw a broken line")
     finally:
         stop_app(app, applog)
         peer.close()
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+        stop_relay(relay)
 
 
 def test_bit():
@@ -463,7 +511,6 @@ def test_identity():
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_BIT_SCAN": "off",
-        "PDA_NET_SCAN": "off",
     })
     try:
         data = wait_for_log(log_path, r"\[id\] selftest", 10)
@@ -501,34 +548,28 @@ def test_identity():
 def test_roundtrip():
     print("the signature round trip: A signs, B verifies", flush=True)
     # The two instances get separate prefs directories (separate keys) and
-    # separate carrier ports, so the only path between them is the relay -
-    # and the relay re-dumps every line with ensure_ascii=True, which is
+    # separate mesh ports, so the only path between them is the relay -
+    # and the relay re-dumps every message with ensure_ascii=True, which is
     # exactly what breaks an unsigned emoji round trip if read_string()
     # cannot combine surrogate pairs.
     port = free_port()
-    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
-                              "--port", str(port), "-v"],
-                             stdout=open(os.path.join(LOGDIR, "chat_rt_relay.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
+    relay, _ = start_relay(port, "rt")
 
     base = {
-        "PDA_RELAY_HOST": "127.0.0.1",
-        "PDA_RELAY_PORT": str(port),
+        "PDA_NSTR_RELAY": relay_url(port),
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_BIT_SCAN": "off",
-        "PDA_NET_SCAN": "off",
     }
     emoji = "\U0001f4cd"          # a non-BMP character: the surrogate case
     a, alog, apath = start_app("rt_a", dict(base, **{
-        "PDA_BITCHAT_PORT": "2425", "PDA_NET_PORT": "7790",
+        "PDA_BITCHAT_PORT": "2425",
         "PDA_NAME": "Satscraft",
         "PDA_TEST_SEND": "drop is marked " + emoji,
-        "PDA_TEST_SEND_IN": "4",
+        "PDA_TEST_SEND_IN": "5",
     }))
     b, blog, bpath = start_app("rt_b", dict(base, **{
-        "PDA_BITCHAT_PORT": "2426", "PDA_NET_PORT": "7791",
+        "PDA_BITCHAT_PORT": "2426",
         "PDA_NAME": "WUMGUB",
     }))
     try:
@@ -537,11 +578,12 @@ def test_roundtrip():
         note(m is not None, "A generated a key and logged it")
         pub_a, npub_a = (m.group(1), m.group(2)) if m else ("", "")
 
-        bdata = wait_for_log(bpath, re.escape("sig ok pub=" + pub_a), 20)
+        wait_for_log(apath, r"\[nstr\] up", 15)
+        bdata = wait_for_log(bpath, re.escape("sig ok pub=" + pub_a), 25)
         note(pub_a and ("sig ok pub=" + pub_a) in bdata,
              "B recomputed the id and verified A's BIP-340 signature")
-        note("[chat] recv via NET from Satscraft: drop is marked " + emoji in bdata,
-             "the signed message came in over NET/relay and was displayed")
+        note("[chat] recv via NSTR from Satscraft: drop is marked " + emoji in bdata,
+             "the signed message came in over nstr/relay and was displayed")
         note(emoji in bdata,
              "the emoji survived the relay's ensure_ascii re-dump and the id still matched")
         if pub_a:
@@ -555,61 +597,40 @@ def test_roundtrip():
     finally:
         stop_app(a, alog)
         stop_app(b, blog)
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+        stop_relay(relay)
 
 
 def test_forgery():
     print("forgery: unsigned, wrong sig, a trusted key signed elsewhere, a swapped body", flush=True)
     port = free_port()
-    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
-                              "--port", str(port), "-v"],
-                             stdout=open(os.path.join(LOGDIR, "chat_fg_relay.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
-    peer.settimeout(0.5)
+    relay, _ = start_relay(port, "fg")
+    peer = peer_connect(port)
 
     base = {
-        "PDA_RELAY_HOST": "127.0.0.1",
-        "PDA_RELAY_PORT": str(port),
+        "PDA_NSTR_RELAY": relay_url(port),
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_BIT_SCAN": "off",
-        "PDA_NET_SCAN": "off",
-        "PDA_TEST_SEND_IN": "3",
+        "PDA_TEST_SEND_IN": "5",
     }
     # two senders: A is the key the device will Trust, A2 is a second key
     # whose signature gets pinned onto A's identity for case (c)
     a, alog, apath = start_app("fg_a", dict(base, **{
-        "PDA_BITCHAT_PORT": "2425", "PDA_NET_PORT": "7790",
+        "PDA_BITCHAT_PORT": "2425",
         "PDA_NAME": "Satscraft", "PDA_TEST_SEND": "this one is really from A",
     }))
     a2, a2log, a2path = start_app("fg_a2", dict(base, **{
-        "PDA_BITCHAT_PORT": "2427", "PDA_NET_PORT": "7792",
+        "PDA_BITCHAT_PORT": "2427",
         "PDA_NAME": "WUMGUB", "PDA_TEST_SEND": "this one is really from A2",
     }))
 
     events = {}
     try:
-        end = time.time() + 14
+        end = time.time() + 20
         while time.time() < end and len(events) < 2:
-            try:
-                data = peer.recv(8192)
-            except socket.timeout:
-                continue
-            for line in data.decode("utf-8", "replace").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    m = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if m.get("kind") == 1 and m.get("sig"):
-                    events[m.get("content", "")] = m
+            ev = peer_event(peer, timeout=2)
+            if ev and ev.get("sig"):
+                events[ev.get("content", "")] = ev
         note(len(events) >= 2, f"captured two genuinely signed events ({len(events)})")
         if len(events) < 2:
             return
@@ -620,11 +641,7 @@ def test_forgery():
         stop_app(a, alog)
         stop_app(a2, a2log)
         peer.close()
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+        stop_relay(relay)
 
     # the device: Trust on A's key, written before boot (log-driven suite)
     bd = instance_dir("fg_b")
@@ -635,7 +652,6 @@ def test_forgery():
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_BIT_SCAN": "off",
-        "PDA_NET_SCAN": "off",
     })
     try:
         wait_for_log(bpath, r"\[id\] pub=", 10)
@@ -723,53 +739,109 @@ def test_no_secret():
          f"no identity.nsec contents (bech32 or hex) in any of {len(set(logs))} logs")
 
 
-def test_carrier_picker():
-    print("the carrier picker - which carriers a message goes out on", flush=True)
-    # The Messages tab has a row of buttons: one per carrier. A carrier that
-    # is off still receives, it just does not send. With NET off the message
-    # must not reach the relay.
-    port = free_port()
-    relay = subprocess.Popen([sys.executable, RELAY, "--host", "127.0.0.1",
-                              "--port", str(port), "-v"],
-                             stdout=open(os.path.join(LOGDIR, "chat_pick_relay.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
-    peer.settimeout(2.0)
-
-    prefs = os.path.join(LOGDIR, "chat_pick_prefs.conf")
+def pick_run(port, prefs_key, label):
+    """one picker run: this pref turns the nstr carrier off, so the message
+    must never reach the relay. The carrier has to be UP first - otherwise
+    the check would pass for the wrong reason (nothing could send anyway)."""
+    prefs = os.path.join(LOGDIR, f"chat_pick_{prefs_key}.conf")
     with open(prefs, "w") as f:
-        f.write("send_net = 0\n")
+        f.write(f"{prefs_key} = 0\n")
 
-    app, applog, log_a = start_app("pick", {
-        "PDA_RELAY_HOST": "127.0.0.1",
-        "PDA_RELAY_PORT": str(port),
+    app, applog, log_a = start_app(f"pick_{prefs_key}", {
+        "PDA_NSTR_RELAY": relay_url(port),
         "PDA_START_TAB": "1",
         "PDA_DEBUG": "1",
         "PDA_NAME": "Satscraft",
         "PDA_PREFS": prefs,
+        "PDA_BIT_SCAN": "off",
         "PDA_TEST_SEND": "only the mesh, please",
+        "PDA_TEST_SEND_IN": "6",
     })
+    peer = peer_connect(port)
     try:
-        time.sleep(4.0)
-        got = False
-        end = time.time() + 4
-        while time.time() < end and not got:
-            try:
-                line = peer.recv(4096)
-            except socket.timeout:
-                break
-            if b"only the mesh, please" in line:
-                got = True
-        note(not got, "the message did not go out on the carrier that is off")
+        data = wait_for_log(log_a, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, f"{label}: the carrier is up (and switched off)")
+        wait_for_log(log_a, r"\[chat\] sent: only the mesh, please", 15)
+        got = peer_event(peer, contains="only the mesh, please", timeout=6)
+        note(got is None, f"{label}: the message did not go out on the carrier that is off")
     finally:
         stop_app(app, applog)
         peer.close()
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+
+
+def test_carrier_picker():
+    print("the carrier picker - which carriers a message goes out on", flush=True)
+    # The Messages tab has a row of buttons: one per carrier. A carrier that
+    # is off still receives, it just does not send. The nstr carrier's key is
+    # send_nstr (the tag, lowercased); an old save_net-only settings file has
+    # to hold the carrier off too, which is what the second run proves.
+    port = free_port()
+    relay, _ = start_relay(port, "pick")
+    try:
+        pick_run(port, "send_nstr", "send_nstr = 0")
+        pick_run(port, "send_net", "legacy send_net = 0")
+    finally:
+        stop_relay(relay)
+
+
+def test_room_scope():
+    print("room scope: the relay's #t filter and the carrier's backstop", flush=True)
+    port = free_port()
+    relay, _ = start_relay(port, "room")
+    peer = peer_connect(port)
+
+    app, applog, log_a = start_app("room", {
+        "PDA_NSTR_RELAY": relay_url(port),
+        "PDA_START_TAB": "1",
+        "PDA_DEBUG": "1",
+        "PDA_NAME": "Satscraft",
+        "PDA_BIT_SCAN": "off",
+    })
+
+    def raw_event(content, tags):
+        """an inline event: the shared helper always writes room + t as the
+           same value, and two of these legs exist only to break that"""
+        ts = int(time.time())
+        ser = json.dumps([0, "", ts, 1, tags, content],
+                         separators=(",", ":"), ensure_ascii=False)
+        eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+        return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                "tags": tags, "content": content}
+
+    try:
+        data = wait_for_log(log_a, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier is up before the three legs")
+
+        # (i) a different t but OUR room: only the relay's #t filter can drop
+        #     it - the carrier's backstop would pass it, so if it ever showed
+        #     up (or logged a room drop) the filter was not doing its job
+        peer.send(json.dumps(["EVENT", raw_event(
+            "wrong t leg", [["room", "SECTOR"], ["t", "OTHER"], ["name", "ROOK"]])]))
+        # (ii) OUR t but a different room: the relay forwards it (t matches),
+        #      and the carrier's backstop is what has to drop it
+        ev_ii = raw_event("wrong room leg",
+                          [["room", "OTHER"], ["t", "SECTOR"], ["name", "ROOK"]])
+        peer.send(json.dumps(["EVENT", ev_ii]))
+        # (iii) t only, no room tag at all: a missing room passes (the same
+        #       rule the chan filter follows)
+        peer.send(json.dumps(["EVENT", raw_event(
+            "right t leg", [["t", "SECTOR"], ["name", "ROOK"]])]))
+
+        data = wait_for_log(log_a, r"recv via NSTR from ROOK: right t leg", 15)
+        note("recv via NSTR from ROOK: right t leg" in data,
+             "(iii) t matches and there is no room tag: it arrives")
+        note("wrong t leg" not in data,
+             "(i) another t never arrives (the relay's #t filter)")
+        note("wrong room leg" not in data,
+             "(ii) our t but another room never reaches the log")
+        drops = re.findall(r"\[nstr\] room drop ([0-9a-f]+)", data)
+        note(drops == [ev_ii["id"]],
+             f"exactly one [nstr] room drop, and it is leg (ii)'s id ({drops})")
+        note("[nstr] recv EVENT" in data, "the pinned [nstr] recv <verb> line is there")
+    finally:
+        stop_app(app, applog)
+        peer.close()
+        stop_relay(relay)
 
 
 def main():
@@ -784,7 +856,9 @@ def main():
     print()
     test_forgery()
     print()
-    test_net(free_port())
+    test_nstr(free_port())
+    print()
+    test_room_scope()
     print()
     test_carrier_picker()
     print()

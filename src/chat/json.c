@@ -104,17 +104,25 @@ static const char * read_string(const char * p, char * out, size_t outn)
 }
 
 /* read a raw value (number, bool, null, object, array) up to the matching
-   end. returns the position after it. */
+   end. returns the position after it. Text inside strings is copied byte
+   for byte - escapes included: a dropped backslash turns a quote escape
+   into a string end (and a unicode escape into literal letters) two parses
+   later, which is exactly how a re-dumped emoji dies. */
 static const char * read_raw(const char * p, char * out, size_t outn)
 {
-    const char * start = p;
     size_t o = 0;
     int depth = 0;
     bool in_str = false;
     while(*p) {
+        if(in_str && *p == '\\' && p[1]) {
+            if(o + 1 < outn) out[o++] = *p;      /* the backslash */
+            p++;
+            if(o + 1 < outn) out[o++] = *p;      /* and what it escapes */
+            p++;
+            continue;
+        }
         if(in_str) {
-            if(*p == '\\' && p[1]) p++;
-            else if(*p == '"') in_str = false;
+            if(*p == '"') in_str = false;
         }
         else if(*p == '"') in_str = true;
         else if(*p == '{' || *p == '[') depth++;
@@ -127,7 +135,6 @@ static const char * read_raw(const char * p, char * out, size_t outn)
         p++;
     }
     if(outn) out[o] = 0;
-    (void)start;
     return p;
 }
 
@@ -359,4 +366,51 @@ bool json_tag(const char * obj, const char * name, char * out, size_t outn)
             return true;
         }
     }
+}
+
+/* ---------- positional reads from a top-level array ---------- */
+
+/* the shared walk of json_arr_get/json_arr_str: *want_str says whether the
+   element has to be a quoted string. Returns true with out filled. */
+static bool arr_get(const char * arr, int idx, char * out, size_t outn,
+                    bool want_str)
+{
+    if(!arr || !out || outn == 0 || idx < 0) return false;
+    out[0] = 0;
+
+    const char * p = skip_ws(arr);
+    if(*p != '[') return false;
+    p++;
+    p = skip_ws(p);
+    if(*p == ']') return false;              /* an empty array has no idx 0 */
+
+    int i = 0;
+    for(;;) {
+        p = skip_ws(p);
+        if(*p == 0) return false;            /* truncated input */
+        if(*p == ']') return false;          /* the index is not there */
+        if(*p == ',') { p++; continue; }
+
+        if(i == idx) {
+            if(*p == '"') {
+                p = read_string(p + 1, out, outn);
+                return true;
+            }
+            if(want_str) { out[0] = 0; return false; }   /* a value, not a string */
+            p = read_raw(p, out, outn);
+            return true;
+        }
+        p = skip_value(p);
+        i++;
+    }
+}
+
+bool json_arr_get(const char * arr, int idx, char * out, size_t outn)
+{
+    return arr_get(arr, idx, out, outn, false);
+}
+
+bool json_arr_str(const char * arr, int idx, char * out, size_t outn)
+{
+    return arr_get(arr, idx, out, outn, true);
 }

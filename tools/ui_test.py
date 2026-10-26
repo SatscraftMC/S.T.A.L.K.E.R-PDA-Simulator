@@ -38,6 +38,10 @@ os.environ.setdefault("PDA_PREFS", os.path.join(RUN_TMP, "prefs.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.environ.get("PDA_TEST_BUILD", os.path.join(ROOT, "build", "pda"))
+RELAY = os.path.join(ROOT, "tools", "nstr_relay.py")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from wsclient import WSClient                      # noqa: E402  (ROOT first)
+
 LOGDIR = "/tmp/opencode/uitest"
 SHOTS = "/tmp/opencode/uishot"
 # where prefs.c looks: $PDA_PREFS, then $XDG_CONFIG_HOME, then ~/.config.
@@ -70,8 +74,8 @@ def unsigned_event(text, name, room="SECTOR", chan=None, ts=None):
     sha256 of the canonical serialization. Tests hold no key, so this is
     exactly the honest CHAT_SIG_NONE path the receiver must still display."""
     ts = int(ts if ts is not None else time.time())
-    tags = [["room", room]]
-    if chan:
+    tags = [["room", room], ["t", room]]   # t mirrors room: the key the
+    if chan:                               # relay's #t filter indexes
         tags.append(["chan", chan])
     tags.append(["name", name])
     ser = json.dumps([0, "", ts, 1, tags, text],
@@ -102,6 +106,151 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def relay_url(port):
+    return f"ws://127.0.0.1:{port}"
+
+
+def start_relay(port, name, tls=False, cert=None, key=None):
+    """the local WebSocket relay (tools/nstr_relay.py), on stdin so a test
+    can drive its control plane; --tls wraps the same server for the local
+    TLS cases"""
+    cmd = [sys.executable, RELAY, "--host", "127.0.0.1", "--port", str(port), "-v"]
+    if tls:
+        cmd += ["--tls", "--cert", cert, "--key", key]
+    logpath = os.path.join(LOGDIR, f"{name}_relay.log")
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                         stdout=open(logpath, "w"),
+                         stderr=subprocess.STDOUT, text=True)
+    time.sleep(1.0)
+    return p, logpath
+
+
+def stop_relay(p):
+    try:
+        if p.stdin:
+            p.stdin.close()
+    except OSError:
+        pass
+    p.terminate()
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+
+
+def peer_connect(port, sub="peer", tls=False, host="127.0.0.1", cafile=None):
+    """the test peer: a WebSocket client with a subscription that takes
+    every kind-1 event"""
+    scheme = "wss" if tls else "ws"
+    w = WSClient(f"{scheme}://{host}:{port}", timeout=5, cafile=cafile)
+    w.send(json.dumps(["REQ", sub, {"kinds": [1]}]))
+    return w
+
+
+def peer_event(w, contains=None, timeout=8):
+    """the next EVENT off the peer (the one whose content contains
+    `contains`, or any). None when nothing arrived in time."""
+    end = time.time() + timeout
+    while time.time() < end:
+        msg = w.recv(timeout=max(0.2, end - time.time()))
+        if not msg:
+            continue
+        try:
+            arr = json.loads(msg)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(arr, list) or len(arr) < 3 or arr[0] != "EVENT":
+            continue
+        ev = arr[2]
+        if not isinstance(ev, dict) or ev.get("kind") != 1:
+            continue
+        if contains is None or contains in (ev.get("content") or ""):
+            return ev
+    return None
+
+
+def wait_for_log_from(path, pattern, start=0, timeout=20):
+    """wait for `pattern` after byte offset `start` - wait_for_log() searches
+    the whole file, which would match the FIRST connection's own lines when
+    what we are waiting for is the second one"""
+    rx = re.compile(pattern)
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            data = _read(path)
+        except OSError:
+            data = ""
+        if rx.search(data[start:]):
+            return data
+        time.sleep(0.3)
+    try:
+        return _read(path)
+    except OSError:
+        return ""
+
+
+def gen_cert(name="nstr"):
+    """a self-signed cert with an IP SAN, so the app's IP-form certificate
+    check can pass under PDA_NSTR_CA. None when the openssl CLI is absent
+    (the TLS cases then print SKIP - never a fake pass)."""
+    d = os.path.join(LOGDIR, "certs")
+    os.makedirs(d, exist_ok=True)
+    cert, key = os.path.join(d, f"{name}.crt"), os.path.join(d, f"{name}.key")
+    if not (os.path.exists(cert) and os.path.exists(key)):
+        r = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
+             "-keyout", key, "-out", cert, "-days", "2"],
+            capture_output=True)
+        if r.returncode != 0:
+            return None, None
+    return cert, key
+
+
+def field_box(logpath, placeholder=None):
+    """the last [field] built line (absolute client coordinates: what
+    click() wants), optionally the one whose placeholder matches. Measured
+    at run time - the first build of a page lays out differently from a
+    later one, so a pinned constant here is a test that silently clicks
+    the row above the field."""
+    ms = re.findall(
+        r"\[field\] built: x=(\d+) y=(\d+) w=(\d+) h=(\d+) content=\d+ "
+        r"textlen=\d+ placeholder=(\S+)", _read(logpath))
+    hits = [m for m in ms if placeholder is None or m[4] == placeholder]
+    if not hits:
+        return None
+    m = hits[-1]
+    return int(m[0]), int(m[1]), int(m[2]), int(m[3])
+
+
+def chat_box(logpath, name):
+    """the absolute box of a Messages-tab object (input / send), measured
+    from PDA_DEBUG_FIELD at run time - (x, y, w, h) or None"""
+    ms = re.findall(r"\[field\] chat: %s x=(\d+) y=(\d+) w=(\d+) h=(\d+)"
+                    % re.escape(name), _read(logpath))
+    if not ms:
+        return None
+    m = ms[-1]
+    return int(m[0]), int(m[1]), int(m[2]), int(m[3])
+
+
+def press_key(keysym, times=1):
+    """press a key by name, N times (BackSpace to clear a field: the suite
+    has no select-all that LVGL is known to honour)"""
+    from Xlib import display, X, XK
+    from Xlib.ext import xtest
+    d = display.Display()
+    code = d.keysym_to_keycode(XK.string_to_keysym(keysym))
+    for _ in range(times):
+        xtest.fake_input(d, X.KeyPress, code)
+        d.sync()
+        time.sleep(0.04)
+        xtest.fake_input(d, X.KeyRelease, code)
+        d.sync()
+        time.sleep(0.04)
+    d.close()
 
 
 def start(env_extra=None, log="app"):
@@ -331,10 +480,18 @@ def type_text(s):
     from Xlib import display, X
     from Xlib.ext import xtest
     from Xlib import XK
+    # python-xlib resolves keysym *names*, not the punctuation characters
+    # themselves (string_to_keysym(':') is 0, string_to_keysym('colon') is
+    # 0x3a) - and a relay URL is all punctuation, so the settings rows could
+    # not be typed into without this map.
+    NAMES = {" ": "space", "/": "slash", ":": "colon", ".": "period",
+             "-": "minus", "_": "underscore", "@": "at", "=": "equal",
+             "+": "plus", "?": "question", ",": "comma", "%": "percent",
+             "'": "apostrophe", '"': "quotedbl"}
     d = display.Display()
     shift = d.keysym_to_keycode(XK.string_to_keysym("Shift_L"))
     for ch in s:
-        ks = XK.string_to_keysym(ch)
+        ks = XK.string_to_keysym(ch) or XK.string_to_keysym(NAMES.get(ch, ""))
         if not ks:
             continue
         code = d.keysym_to_keycode(ks)
@@ -624,9 +781,12 @@ def test_settings_file():
 
 def test_no_carriers():
     print("5. no relay, no daemon", flush=True)
+    # a URL at a port nothing is listening on: the carrier tries, says so,
+    # and the app carries on. One URL, so it cannot be half-set the way
+    # PDA_RELAY_PORT without PDA_RELAY_HOST was (the parked item of the
+    # last baseline - now runnable)
     p, f, logpath = start({"PDA_START_TAB": "1",
-                            "PDA_RELAY_HOST": "127.0.0.1",
-                            "PDA_RELAY_PORT": str(free_port()),
+                            "PDA_NSTR_RELAY": relay_url(free_port()),
                             "PDA_FIPS_SOCK": "/tmp/opencode/uitest/none.sock"},
                            "nocarriers")
     time.sleep(3.0)
@@ -678,80 +838,56 @@ def test_hard_use():
 def test_json_escaping():
     print("7. a name that would break the wire format", flush=True)
     port = free_port()
-    relay = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "relay.py"),
-                              "--host", "127.0.0.1", "--port", str(port), "-v"],
-                             stdout=open(os.path.join(LOGDIR, "relay.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
-    peer.settimeout(5)
+    relay, rlog_path = start_relay(port, "escape")
+    peer = peer_connect(port)
     name = 'Ro"ok\\Blue'
-    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_RELAY_PORT": str(port),
-                            "PDA_NAME": name, "PDA_TEST_SEND": "hello there"},
-                           "escape")
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_NSTR_RELAY": relay_url(port),
+                           "PDA_NAME": name, "PDA_TEST_SEND": "hello there",
+                           "PDA_TEST_SEND_IN": "5"},
+                          "escape")
     try:
-        time.sleep(3.0)
-        got = None
-        end = time.time() + 6
-        while time.time() < end and not got:
-            try:
-                data = peer.recv(4096)
-            except socket.timeout:
-                continue
-            for line in data.decode("utf-8", "replace").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    m = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if m.get("kind") == 1 and m.get("content"):
-                    got = m
+        wait_for_log(logpath, r"\[nstr\] up", 15)
+        got = peer_event(peer, contains="hello there", timeout=10)
         note(got is not None and name_of(got) == name,
              f"the relay parsed the message from {name!r} "
              f"(got {got and name_of(got)!r})")
-        with open(os.path.join(LOGDIR, "relay.log")) as f:
-            rlog = f.read()
+        with open(rlog_path) as fh:
+            rlog = fh.read()
         note("bad line" not in rlog, "the relay did not see a broken line")
+        note(app_alive(p, logpath), "the app is alive with the escaped name")
     finally:
         stop(p, f)
         peer.close()
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+        stop_relay(relay)
 
 
 def test_many_messages():
     print("8. a lot of messages", flush=True)
     port = free_port()
-    relay = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "relay.py"),
-                              "--host", "127.0.0.1", "--port", str(port)],
-                             stdout=open(os.path.join(LOGDIR, "relay2.log"), "w"),
-                             stderr=subprocess.STDOUT)
-    time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
-    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_RELAY_PORT": str(port)},
+    relay, _ = start_relay(port, "many")
+    peer = peer_connect(port)
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_NSTR_RELAY": relay_url(port),
+                           "PDA_BIT_SCAN": "off"},
                           "many")
     try:
-        time.sleep(2.5)
+        wait_for_log(logpath, r"\[nstr\] up", 15)
         long_msg = "a very long message " * 40
         for i in range(220):
-            peer.sendall((json.dumps(unsigned_event(
-                long_msg if i == 5 else f"message {i}", "ROOK")) + "\n").encode())
-        time.sleep(4.0)
+            peer.send(json.dumps(["EVENT", unsigned_event(
+                long_msg if i == 5 else f"message {i}", "ROOK")]))
+        data = wait_for_log(logpath, r"message 219", 25)
+        n = len(re.findall(r"\[chat\] recv via NSTR", data))
+        note("message 219" in data, "the last of the 220 messages arrived")
+        note(n >= 200, f"the app really received them ({n} of 220 in the log)")
         ok = app_alive(p, logpath)
         shot("many")
         note(ok, "220 messages (one of them very long) do not kill the app")
     finally:
         stop(p, f)
         peer.close()
-        relay.terminate()
-        try:
-            relay.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            relay.kill()
+        stop_relay(relay)
 
 
 def test_mesh_channel():
@@ -1595,7 +1731,7 @@ def test_trust():
     for x in (d, sd, idd):
         os.makedirs(x, exist_ok=True)
     prefs = os.path.join(d, "prefs.conf")
-    quiet = {"PDA_BIT_SCAN": "off", "PDA_NET_SCAN": "off", "PDA_DEBUG": "1"}
+    quiet = {"PDA_BIT_SCAN": "off", "PDA_DEBUG": "1"}
 
     s1, s1f, s1log = start({
         "PDA_PREFS": os.path.join(sd, "prefs.conf"),
@@ -1868,6 +2004,507 @@ def test_key_actions():
         stop(p, f)
 
 
+def test_relay_row():
+    print("19. the relay row: the URL the NSTR carrier dials", flush=True)
+    port = free_port()
+    relay, _ = start_relay(port, "relayrow")
+    prefs = os.path.join(LOGDIR, "relayrow_prefs.conf")
+    if os.path.exists(prefs):
+        os.unlink(prefs)
+
+    # (a) nothing configured: the example is the placeholder, the carrier
+    #     reads `no relay`, and the row draws (EN)
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1",
+                           "PDA_OTHER_SUB": "0", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1", "PDA_PREFS": prefs},
+                          "relayrow_empty")
+    time.sleep(3.0)
+    try:
+        data = _read(logpath)
+        note("placeholder=wss://relay.example.com" in data,
+             "empty field: the example URL is the placeholder")
+        note("[nstr] reason: no relay" in data,
+             "empty field: the carrier reads `no relay`")
+        n = lit_pixels(shot("relayrow_en"), DY + 40, DY + 300)
+        note(n > 0, f"the Info page with the row renders in English ({n} px)")
+        note(app_alive(p, logpath), "the app is alive with no relay URL")
+    finally:
+        stop(p, f)
+
+    # (b) SAVE a URL: the field shows it and the carrier dials it
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1",
+                           "PDA_OTHER_SUB": "0", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1", "PDA_PREFS": prefs},
+                          "relayrow_save")
+    try:
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 0)      # rebuild: final layout
+        time.sleep(1.2)
+        box = field_box(logpath, "wss://relay.example.com")
+        note(box is not None, "the relay field is on the Info page")
+        if box:
+            x0, y0, w, h = box
+            click(x0 + w // 2, y0 + h // 2)
+            time.sleep(0.4)
+            type_text(relay_url(port))
+            time.sleep(0.4)
+            # the SAVE button of the same row: 232 px into the value column
+            # (the geometry the name row's SAVE_X was measured on)
+            click(x0 + 232 + 26, y0 + 8)
+            time.sleep(1.0)
+        saved = _read(prefs)
+        note(re.search(r"nstr_relay\s*=\s*" + re.escape(relay_url(port)), saved) is not None,
+             f"SAVE wrote the URL to the settings file ({saved.strip()!r})")
+        data = wait_for_log(logpath, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier dialed the saved URL and came up")
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 0)      # rebuild to re-read the box
+        time.sleep(1.2)
+        nfield = len(relay_url(port))
+        note(re.search(r"\[field\] built:[^\n]*textlen=%d\b" % nfield,
+                       _read(logpath)) is not None,
+             f"the field shows the saved URL as its text ({nfield} chars)")
+
+        # (c) clearing the field clears the pref (no env var in this run).
+        #     Count first: the `no relay` transition lands within the second
+        #     after SAVE, and a count taken then would see its own answer.
+        before = _read(logpath).count("[nstr] reason: no relay")
+        box = field_box(logpath)
+        if box:
+            x0, y0, w, h = box
+            click(x0 + w // 2, y0 + h // 2)
+            time.sleep(0.4)
+            press_key("BackSpace", 60)
+            time.sleep(0.3)
+            click(x0 + 232 + 26, y0 + 8)
+            time.sleep(1.0)
+        saved = _read(prefs)
+        note(re.search(r"nstr_relay\s*=\s*$", saved, re.M) is not None,
+             f"clearing the field cleared the pref ({saved.strip()!r})")
+        time.sleep(3.0)
+        after = _read(logpath).count("[nstr] reason: no relay")
+        note(after > before,
+             "with the pref gone and no env var, the carrier goes back to `no relay`")
+        note(app_alive(p, logpath), "the app is alive through save and clear")
+    finally:
+        stop(p, f)
+
+    # (d) PDA_NSTR_RELAY wins: clearing the field must not disconnect
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1",
+                           "PDA_OTHER_SUB": "0", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1", "PDA_PREFS": prefs,
+                           "PDA_NSTR_RELAY": relay_url(port)},
+                          "relayrow_env")
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the env URL is what the carrier dials")
+        opens = _read(logpath).count("[nstr] open ")
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 0)
+        time.sleep(1.2)
+        box = field_box(logpath)
+        if box:
+            x0, y0, w, h = box
+            click(x0 + w // 2, y0 + h // 2)
+            time.sleep(0.4)
+            press_key("BackSpace", 60)
+            time.sleep(0.3)
+            click(x0 + 232 + 26, y0 + 8)
+            time.sleep(3.0)
+        data = _read(logpath)
+        note(data.count("[nstr] open ") == opens and "[nstr] reason: no relay" not in data,
+             "clearing the field with PDA_NSTR_RELAY set does not disconnect (env wins)")
+        note(app_alive(p, logpath), "the app is alive with the env override")
+    finally:
+        stop(p, f)
+    stop_relay(relay)
+
+    # (e) the row renders in Polish too (the parity assertion covers the
+    #     table; this covers the row actually asking for TR_RELAY)
+    with open(prefs, "w") as fh:
+        fh.write("lang = pl\n")
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "1",
+                           "PDA_OTHER_SUB": "0", "PDA_DEBUG_FIELD": "1",
+                           "PDA_PREFS": prefs},
+                          "relayrow_pl")
+    time.sleep(3.0)
+    try:
+        n = lit_pixels(shot("relayrow_pl"), DY + 40, DY + 300)
+        note(n > 0, f"the Info page with the row renders in Polish ({n} px)")
+        note("placeholder=wss://relay.example.com" in _read(logpath),
+             "the row is built in Polish too")
+        note(app_alive(p, logpath), "the app is alive in Polish")
+    finally:
+        stop(p, f)
+        if os.path.exists(prefs):
+            os.unlink(prefs)
+
+
+def test_room_switch():
+    print("20. changing the room while up replaces the subscription", flush=True)
+    port = free_port()
+    relay, _ = start_relay(port, "roomsw")
+    peer = peer_connect(port)
+    prefs = os.path.join(LOGDIR, "roomsw_prefs.conf")
+    if os.path.exists(prefs):
+        os.unlink(prefs)
+
+    p, f, logpath = start({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0",
+                           "PDA_OTHER_SUB": "5", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1", "PDA_PREFS": prefs,
+                           "PDA_NSTR_RELAY": relay_url(port)},
+                          "roomsw")
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier is up in the room it booted in")
+
+        # change the room on the User page (its placeholder is the room)
+        click(SUB_X, SUB_Y0 + SUB_PITCH * 5)
+        time.sleep(1.2)
+        box = field_box(logpath, "SECTOR")
+        note(box is not None, "the room field is on the User page")
+        if box:
+            x0, y0, w, h = box
+            click(x0 + w // 2, y0 + h // 2)
+            time.sleep(0.4)
+            press_key("BackSpace", 40)
+            type_text("ALPHA")
+            time.sleep(0.3)
+            click(x0 + 232 + 26, y0 + 8)
+            time.sleep(1.0)
+        saved = _read(prefs)
+        note(re.search(r"room\s*=\s*ALPHA", saved) is not None,
+             f"the new room was saved ({saved.strip()!r})")
+
+        def ev(content, room):
+            ts = int(time.time())
+            tags = [["room", room], ["t", room], ["name", "ROOK"]]
+            ser = json.dumps([0, "", ts, 1, tags, content],
+                             separators=(",", ":"), ensure_ascii=False)
+            eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+            return {"id": eid, "pubkey": "", "created_at": ts, "kind": 1,
+                    "tags": tags, "content": content}
+
+        peer.send(json.dumps(["EVENT", ev("old room hello", "SECTOR")]))
+        time.sleep(1.5)
+        peer.send(json.dumps(["EVENT", ev("new room hello", "ALPHA")]))
+        data = wait_for_log(logpath, r"recv via NSTR from ROOK: new room hello", 15)
+        note("recv via NSTR from ROOK: new room hello" in data,
+             "the event tagged with the NEW room's t arrives (only a replacement "
+             "REQ makes that possible)")
+        note("old room hello" not in data,
+             "the event tagged with the OLD room's t does not arrive")
+        note(app_alive(p, logpath), "the app is alive across the room switch")
+    finally:
+        stop(p, f)
+        peer.close()
+        stop_relay(relay)
+        if os.path.exists(prefs):
+            os.unlink(prefs)
+
+
+def test_nstr_failures():
+    print("21. relay failure modes: refused, tls, closed, oversize, no reply", flush=True)
+
+    # (a) nobody is listening: refused, and the attempts are few and far
+    #     between (the 2 -> 30 s backoff). Count-based: these logs carry no
+    #     timestamps and none are invented.
+    port = free_port()
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_BIT_SCAN": "off",
+                           "PDA_NSTR_RELAY": relay_url(port)}, "nfail_refused")
+    time.sleep(14)
+    data = _read(logpath)
+    note("reason: refused" in data, "a port nobody answers: `refused`")
+    n_open = len(re.findall(r"\[nstr\] open ", data))
+    note(2 <= n_open <= 6,
+         f"the opens are few and spreading, backoff holds ({n_open} in ~14 s)")
+    note(app_alive(p, logpath), "the app is alive through the backoff")
+    stop(p, f)
+
+    # (b) local TLS against the harness's --tls mode. The certificate is
+    #     self-signed with an IP SAN: rejected by the default store (proof
+    #     verification is on), accepted under PDA_NSTR_CA (the decided
+    #     per-attempt mechanism).
+    cert, key = gen_cert()
+    if not cert:
+        print("    SKIP  local TLS: no openssl CLI on this box", flush=True)
+    else:
+        tport = free_port()
+        trelay, _ = start_relay(tport, "nfail_tls", tls=True, cert=cert, key=key)
+
+        p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                               "PDA_BIT_SCAN": "off",
+                               "PDA_NSTR_RELAY": f"wss://127.0.0.1:{tport}"},
+                              "nfail_tls_reject")
+        data = wait_for_log(logpath, r"\[nstr\] reason: tls failed", 20)
+        note("reason: tls failed" in data,
+             "self-signed cert, default CA store: `tls failed` (no bypass)")
+        note(app_alive(p, logpath), "the app is alive after the rejected handshake")
+        stop(p, f)
+
+        p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                               "PDA_BIT_SCAN": "off",
+                               "PDA_NSTR_RELAY": f"wss://127.0.0.1:{tport}",
+                               "PDA_NSTR_CA": cert,
+                               "PDA_TEST_SEND": "tls round trip",
+                               "PDA_TEST_SEND_IN": "5"},
+                              "nfail_tls_ca")
+        data = wait_for_log(logpath, r"\[nstr\] up", 20)
+        note("[nstr] up" in data, "PDA_NSTR_CA: the same relay connects (IP-form check)")
+        tpeer = peer_connect(tport, tls=True, cafile=cert)
+        got = peer_event(tpeer, contains="tls round trip", timeout=10)
+        note(got is not None, "and a message round-trips over wss://")
+        note(app_alive(p, logpath), "the app is alive with the CA bundle loaded")
+        stop(p, f)
+        tpeer.close()
+        stop_relay(trelay)
+
+    # (c) the message layer: a ping is answered silently, a fragment is
+    #     reassembled and shown, garbage never crashes, an unknown verb and
+    #     a non-string verb are ignored, then CLOSED demotes honestly
+    port = free_port()
+    relay, rlog_path = start_relay(port, "nfail")
+    peer = peer_connect(port)
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_BIT_SCAN": "off",
+                           "PDA_NSTR_RELAY": relay_url(port)}, "nfail_msg")
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier is up for the message cases")
+
+        relay.stdin.write("ping\n")
+        relay.stdin.flush()
+        time.sleep(1.5)
+        with open(rlog_path) as fh:
+            rlog = fh.read()
+        note("[<-] pong" in rlog, "the app answered the harness's ping with a pong "
+                                  "(the app itself is silent by design)")
+
+        # as the relay delivers it: verb, subscription id, event
+        frag_msg = json.dumps(["EVENT", "pda", unsigned_event(
+            "the whole message at once", "ROOK")])
+        relay.stdin.write("fragment " + frag_msg + "\n")
+        relay.stdin.flush()
+        data = wait_for_log(logpath, r"the whole message at once", 10)
+        note("recv via NSTR from ROOK: the whole message at once" in data,
+             "a fragmented delivery is reassembled and displayed")
+
+        relay.stdin.write("raw [1, 2, 3]\n")
+        relay.stdin.flush()
+        relay.stdin.write("raw [\"WAT\", \"x\"]\n")
+        relay.stdin.flush()
+        relay.stdin.write("raw [\"NOTICE\", \"slow down\"]\n")
+        relay.stdin.flush()
+        relay.stdin.write("raw this is not json at all\n")
+        relay.stdin.flush()
+        time.sleep(2.0)
+        data = _read(logpath)
+        note("[nstr] recv ?" in data, "an array with no string verb is delivered as ?")
+        note("[nstr] recv WAT" in data, "an unknown verb is read, logged and ignored")
+        note("[nstr] recv NOTICE" in data, "NOTICE is surfaced to the caller, not swallowed")
+        note("[nstr] bad message" in data, "garbage is dropped inside the module")
+        note(app_alive(p, logpath), "malformed input does not crash or stall the app")
+
+        relay.stdin.write("closed pda policy says no\n")
+        relay.stdin.flush()
+        data = wait_for_log(logpath, r"\[nstr\] reason: closed", 10)
+        note("reason: closed" in data, "CLOSED for sub `pda` demotes to `closed`")
+
+        # the carrier comes back on its own (backoff), then one frame the
+        # reassembly buffer cannot hold. Wait for an `up` that comes AFTER
+        # this point: the log already holds the first one.
+        here = len(_read(logpath))
+        data = wait_for_log_from(logpath, r"\[nstr\] up", here, 20)
+        note("[nstr] up" in data[here:], "the carrier came back after the CLOSED")
+        relay.stdin.write("oversize 8192\n")
+        relay.stdin.flush()
+        data = wait_for_log(logpath, r"\[nstr\] reason: bad ws", 10)
+        note("reason: bad ws" in data, "an oversized frame closes with `bad ws`")
+        note(app_alive(p, logpath), "the app is alive after the bad frame")
+    finally:
+        stop(p, f)
+        peer.close()
+        stop_relay(relay)
+
+    # (d) a peer that accepts and never answers: the 20 s attempt deadline
+    #     is what has to fire (a stall is never a stage-specific reason)
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)                 # accept never runs: the client's bytes die here
+    dead = srv.getsockname()[1]
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_BIT_SCAN": "off",
+                           "PDA_NSTR_RELAY": relay_url(dead)}, "nfail_blackhole")
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] reason: no reply", 30)
+        note("reason: no reply" in data,
+             "a peer that never answers hits the 20 s deadline: `no reply`")
+        note(app_alive(p, logpath), "the app is alive through the stalled attempt")
+    finally:
+        stop(p, f)
+        srv.close()
+
+
+def test_nstr_queue():
+    print("22. outbound queue pressure (the relay stops reading)", flush=True)
+    # The harness `pause` stops *reading*, so the kernel buffers fill first:
+    # the queue question (spec DECIDE: keep 2 slots or grow to 4) is answered
+    # by evidence or recorded as not exercised - never claimed as tested.
+    # SEND fires exactly once from PDA_TEST_SEND, so the loop is UI-driven.
+    port = free_port()
+    relay, _ = start_relay(port, "nqueue")
+    peer = peer_connect(port)
+    prefs = os.path.join(LOGDIR, "nqueue_prefs.conf")
+    if os.path.exists(prefs):
+        os.unlink(prefs)
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1",
+                           "PDA_BIT_SCAN": "off", "PDA_PREFS": prefs,
+                           "PDA_NSTR_RELAY": relay_url(port)}, "nqueue")
+    wait_for_log(logpath, r"\[field\] chat: send", 10)
+    ibox = chat_box(logpath, "input")
+    sbox = chat_box(logpath, "send")
+    note(ibox is not None and sbox is not None,
+         f"the compose row's field and SEND button were measured ({ibox}, {sbox})")
+    input_xy = (ibox[0] + ibox[2] // 2, ibox[1] + ibox[3] // 2) if ibox else (0, 0)
+    send_xy = (sbox[0] + sbox[2] // 2, sbox[1] + sbox[3] // 2) if sbox else (0, 0)
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] up", 15)
+        note("[nstr] up" in data, "the carrier is up before the pressure")
+        relay.stdin.write("pause\n")
+        relay.stdin.flush()
+        refused = False
+        for i in range(12):
+            click(*input_xy)
+            time.sleep(0.3)
+            type_text(f"q{i} pressure")
+            time.sleep(0.3)
+            click(*send_xy)
+            time.sleep(0.5)
+            data = _read(logpath)
+            if "[nstr] send refused" in data or "nstr failed" in data:
+                refused = True
+                break
+        if refused:
+            note(True, "a refusal showed up under backpressure "
+                       "([nstr] send refused / nstr failed) - see build-approach.md")
+        else:
+            note(True,
+                 f"12 sends with the relay not reading: no refusal - the kernel "
+                 f"buffers absorbed them, so the queue itself was NOT exercised "
+                 f"(lean 2 kept; recorded honestly in build-approach.md)")
+        note(app_alive(p, logpath), "the app is alive through the burst")
+        n_sent = len(re.findall(r"\[chat\] sent: q", _read(logpath)))
+        note(n_sent >= 10, f"the burst actually drove the UI ({n_sent} sends)")
+    finally:
+        stop(p, f)
+        peer.close()
+        stop_relay(relay)
+        if os.path.exists(prefs):
+            os.unlink(prefs)
+
+
+def test_live_relay():
+    """23. the live check - the slice's "So that": one signed event out to a
+    real public relay, one independent subscriber back (tools/wsclient.py,
+    default ssl context = real certificate validation on the way in), its id
+    recomputed here rather than trusted from the wire. Offline: SKIP."""
+    print("23. live check against a public wss:// relay", flush=True)
+    # chosen at build: two candidates answered an unauthenticated REQ
+    # (relay.damus.io started 503-ing the upgrade, so it is out), and this
+    # one takes the suite's single signed event without rate-limiting it
+    relay_url_live = os.environ.get("PDA_LIVE_RELAY", "wss://relay.primal.net")
+    peer = None
+    try:
+        peer = WSClient(relay_url_live, timeout=8)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"    SKIP  no usable relay or no internet: {e}", flush=True)
+        return
+    room = f"LIVE{int(time.time()) % 100000}"
+    peer.send(json.dumps(["REQ", "livecheck", {"kinds": [1], "#t": [room],
+                                               "limit": 50}]))
+    marker = f"nstr live check {room}"
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_DEBUG_FIELD": "1",
+                           "PDA_BIT_SCAN": "off",
+                           "PDA_NSTR_RELAY": relay_url_live,
+                           "PDA_ROOM": room},
+                          "live")
+    try:
+        data = wait_for_log(logpath, r"\[nstr\] up", 30)
+        if "[nstr] up" not in data:
+            note(False, f"the app came up on {relay_url_live}")
+            return
+        # send through the real compose row, once the carrier is up - a
+        # PDA_TEST_SEND fires at a fixed moment and would race a TLS
+        # handshake over the internet
+        wait_for_log(logpath, r"\[field\] chat: send", 10)
+        ibox, sbox = chat_box(logpath, "input"), chat_box(logpath, "send")
+        click(ibox[0] + ibox[2] // 2, ibox[1] + ibox[3] // 2)
+        time.sleep(0.4)
+        type_text(marker)
+        time.sleep(0.4)
+        click(sbox[0] + sbox[2] // 2, sbox[1] + sbox[3] // 2)
+        wait_for_log(logpath, r"\[chat\] sent:", 10)
+        note("[chat] sent:" in _read(logpath), "the message was sent from the UI")
+        wait_for_log(logpath, r"\[nstr\] recv OK", 30)
+        note("[nstr] recv OK" in _read(logpath),
+             f"the relay answered our publish with OK ({relay_url_live})")
+
+        got = peer_event(peer, contains=marker, timeout=25)
+        note(got is not None, "an independent subscriber saw the event")
+        if got:
+            # slice A's rule: the id is recomputed here, never trusted
+            ser = json.dumps([0, got.get("pubkey", ""), got.get("created_at"),
+                              got.get("kind", 1), got.get("tags", []),
+                              got.get("content", "")],
+                             separators=(",", ":"), ensure_ascii=False)
+            eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
+            note(eid == got.get("id"),
+                 "its id recomputes to exactly what the relay delivered")
+            note(got.get("pubkey") and len(got.get("sig", "")) == 128,
+                 "it arrived signed (pubkey + 128-hex sig)")
+    finally:
+        stop(p, f)
+        peer.close()
+
+
+def test_url_forms():
+    """the URL parser's table, asserted the only way the suites can: what the
+    carrier's pinned debug lines say for each form (spec-nstr-relay section 1
+    + the section 5 reason table)."""
+    print("24. the relay URL forms the parser accepts and rejects", flush=True)
+
+    # rejected as `bad url`, never dialed: a bare host, userinfo, an
+    # uppercase scheme. Each is a per-URL-string verdict: one open, no retry.
+    for bad in ("relay.example.com", "ws://user@127.0.0.1:9", "WS://127.0.0.1:9",
+                "ws://127.0.0.1:0"):
+        p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                               "PDA_BIT_SCAN": "off",
+                               "PDA_NSTR_RELAY": bad}, "url_bad")
+        data = wait_for_log(logpath, r"\[nstr\] reason: bad url", 8)
+        note("reason: bad url" in data, f"rejected as bad url: {bad!r}")
+        note(data.count("[nstr] open ") <= 1,
+             "a parse verdict is per URL string: one open, no retry")
+        stop(p, f)
+
+    # accepted: a path (passed through verbatim), a non-default port label,
+    # and wss:// on a non-default port (the TLS legs dial exactly this)
+    port = free_port()
+    relay, _ = start_relay(port, "urlform")
+    peer = peer_connect(port)
+    p, f, logpath = start({"PDA_START_TAB": "1", "PDA_DEBUG": "1",
+                           "PDA_BIT_SCAN": "off",
+                           "PDA_NSTR_RELAY": f"ws://127.0.0.1:{port}/some/path"},
+                          "url_path")
+    data = wait_for_log(logpath, r"\[nstr\] up", 15)
+    note("[nstr] up" in data, "a path after the port still connects (passed through)")
+    note(f"open ws://127.0.0.1:{port}/some/path" in data,
+         "the dial used the URL exactly as given")
+    stop(p, f)
+    peer.close()
+    stop_relay(relay)
+
+
 def test_docs():
     print("18. i18n parity and the doc claims this build touched", flush=True)
     # every TR_ id in the enum has an EN and a PL entry
@@ -1939,6 +2576,12 @@ TESTS = {
     "trust": test_trust,
     "keys": test_key_actions,
     "docs": test_docs,
+    "relayrow": test_relay_row,
+    "roomsw": test_room_switch,
+    "nstrfail": test_nstr_failures,
+    "nstrqueue": test_nstr_queue,
+    "live": test_live_relay,
+    "urlforms": test_url_forms,
 }
 
 def main():

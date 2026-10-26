@@ -13,7 +13,7 @@
 /* registered by the carrier modules */
 void chat_bit_register(void);
 void chat_fips_register(void);
-void chat_net_register(void);
+void chat_nstr_register(void);
 
 static chat_msg_t s_msgs[CHAT_MAX_MSG];
 static int s_head = 0;      /* index of the oldest message */
@@ -187,7 +187,7 @@ void chat_init(void)
 
     chat_bit_register();
     chat_fips_register();
-    chat_net_register();
+    chat_nstr_register();
 }
 
 int chat_count(void)
@@ -462,15 +462,20 @@ bool chat_event_build(char * out, size_t outn, char * id_out,
     id_out[0] = 0;
     s_last_built_signed = false;
 
-    char e_room[160], e_chan[160], e_name[224];
+    char e_room[160], e_t[160], e_chan[160], e_name[224];
     json_escape(s_room, e_room, sizeof(e_room));
+    json_escape(s_room, e_t, sizeof(e_t));
     json_escape(s_chan, e_chan, sizeof(e_chan));
     json_escape(s_id, e_name, sizeof(e_name));
 
-    char tags[640];
+    /* tag order is part of the signed serialization, so it is fixed here:
+       room, t (the same value as room - the standard single-letter key
+       relays index, so the room is queryable on the wire), chan, name */
+    char tags[768];
     int tw = snprintf(tags, sizeof(tags),
-                      "[[\"room\",\"%s\"],[\"chan\",\"%s\"],[\"name\",\"%s\"]]",
-                      e_room, e_chan, e_name);
+                      "[[\"room\",\"%s\"],[\"t\",\"%s\"],[\"chan\",\"%s\"],"
+                      "[\"name\",\"%s\"]]",
+                      e_room, e_t, e_chan, e_name);
     if(tw < 0 || (size_t)tw >= sizeof(tags)) return false;
 
     char ser[2048], id[65], sig[129];

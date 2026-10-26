@@ -33,6 +33,20 @@ bool json_get_int(const char * obj, const char * key, long * out);
 bool json_tags_rebuild(const char * obj, char * out, size_t outn);
 bool json_tag(const char * obj, const char * name, char * out, size_t outn);
 
+/* Positional reads from a top-level JSON *array* - the NIP-01 relay
+   messages are arrays (["OK", id, true, msg]), whose elements are mixed
+   type and have no keys, so the key-based json_get() above cannot see
+   them. Same value semantics: strings unescaped, nested objects/arrays
+   raw, numbers/booleans/null as text. Returns false when the index is
+   not there or the input is not an array.
+
+   json_arr_str() is the same read but only for a string element - what
+   the caller uses when the type matters (element 0 of a relay message is
+   the verb; an element that is not a string has no verb, which is how
+   ["?"] arrives at the dispatch). */
+bool json_arr_get(const char * arr, int idx, char * out, size_t outn);
+bool json_arr_str(const char * arr, int idx, char * out, size_t outn);
+
 /* Escape a string into a JSON string body (no quotes added). Returns the
    number of bytes written, excluding the terminator. Bytes >=0x80 pass
    through raw (valid UTF-8). */

@@ -8,6 +8,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Python COMPONENTS Interpreter REQUIRED)
 find_package(Threads REQUIRED)
 
+# OpenSSL: the nstr relay carrier's TLS (wss://) and the WebSocket handshake's
+# SHA-1 / base64 / mask RNG. REQUIRED at configure time on both the host and
+# the Pi image - a missing package fails the build, never builds without TLS.
+find_package(OpenSSL REQUIRED)
+
 set(LV_BUILD_SET_CONFIG_OPTS ON CACHE BOOL "" FORCE)
 set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lv_conf.h" CACHE PATH "" FORCE)
 set(LV_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
@@ -49,7 +54,8 @@ file(GLOB_RECURSE PDA_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src
 
 add_executable(pda ${PDA_SOURCES})
 target_include_directories(pda PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(pda PRIVATE lvgl::lvgl secp256k1 Threads::Threads)
+target_link_libraries(pda PRIVATE lvgl::lvgl secp256k1 Threads::Threads
+                                 OpenSSL::SSL OpenSSL::Crypto)
 
 # an undeclared function is assumed to return int - which silently truncates
 # a pointer (getenv without <stdlib.h> did exactly that)

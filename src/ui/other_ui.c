@@ -35,7 +35,7 @@
  *   +--------------------------------------------------+
  *   | Settings    |  Info      |  NETWORKING            |
  *   | Connections |  Bitchat   |  BIT ......... ONLINE   |
- *   | Extras      |  F.I.P.S   |  NET ......... OFFLINE |
+ *   | Extras      |  F.I.P.S   |  Nostr relay ... OFFLINE|
  *   |             |  WiFi      |                        |
  *   +--------------------------------------------------+
  *
@@ -103,6 +103,9 @@ static void on_save_name(lv_event_t * e);
 static void on_save_room(lv_event_t * e);
 static void on_save_channel(lv_event_t * e);
 static void other_ui_on_channel(lv_event_t * e);
+static void save_relay(lv_obj_t * ta);
+static void other_ui_on_relay(lv_event_t * e);
+static void on_save_relay(lv_event_t * e);
 static void build_content(void);
 static void on_key_toggle(lv_event_t * e);
 static void on_new_click(lv_event_t * e);
@@ -151,6 +154,11 @@ typedef struct {
     lv_obj_t * room_btn;
     lv_obj_t * name_btn_lbl;
     lv_obj_t * room_btn_lbl;
+
+    /* the relay URL row on the Info page (the nstr carrier's one setting) */
+    lv_obj_t * relay_ta;
+    lv_obj_t * relay_btn;
+    lv_obj_t * relay_btn_lbl;
 
     /* the identity rows under IDENTITY: the nstr key, the reveal block,
        [KEY] / [NEW] / [PASTE] and the import field */
@@ -404,6 +412,22 @@ static void page_info(void)
                  st[i].up ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
     }
 
+    /* the one URL the nstr carrier dials, beside the state rows it explains.
+       The *effective* URL is the field's text when one is configured (env
+       wins over the pref - the house rule) and the example is the
+       placeholder when there is none: text_field() only ever sets a
+       placeholder, so a saved value has to go in the text to be visible. */
+    lv_obj_t * rr = row(g_ui.content, tr(TR_RELAY));
+    const char * eff = getenv("PDA_NSTR_RELAY");
+    if(!eff || !*eff) eff = prefs_str("nstr_relay", "");
+    lv_obj_t * rta = text_field(rr, "wss://relay.example.com");
+    if(eff && *eff) lv_textarea_set_text(rta, eff);
+    lv_obj_add_event_cb(rta, other_ui_on_relay, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, rta);
+    g_ui.relay_ta = rta;
+    g_ui.relay_btn = save_button(rr, on_save_relay);
+    g_ui.relay_btn_lbl = lv_obj_get_child(g_ui.relay_btn, 0);
+
     section(g_ui.content, "HARDWARE");
     live_row(g_ui.content, "WiFi", "wifi", wifi_up() ? "CONNECTED" : "OFFLINE",
              wifi_up() ? PDA_CARRIER_UP : PDA_CARRIER_DOWN);
@@ -523,8 +547,10 @@ static void page_bitchat(void)
     g_ui.chan_btn_lbl = lv_obj_get_child(g_ui.chan_btn, 0);
 
     live_row(g_ui.content, "Bluetooth", "bit_radio", "no adapter", PDA_MSG_TEXT);
-    snprintf(buf, sizeof(buf), "%s", getenv("PDA_NET_PORT") ? getenv("PDA_NET_PORT")
-                                                            : "7788");
+    /* the LAN port is BIT's: the old NET row showed PDA_NET_PORT (7788),
+       and that half of NET left with spec-nstr-relay B1 */
+    snprintf(buf, sizeof(buf), "%s", getenv("PDA_BITCHAT_PORT") ? getenv("PDA_BITCHAT_PORT")
+                                                                : "2425");
     live_row(g_ui.content, "LAN port", "net_port", buf, PDA_MSG_TEXT);
     live_row(g_ui.content, "Discovery", "bit_scan", "off", PDA_MSG_TEXT);
     live_row(g_ui.content, "Bridge", "bit_bridge",
@@ -539,8 +565,8 @@ static void page_bitchat(void)
     /* the mesh needs the port open: a firewall that drops what comes in
        leaves the device deaf, and nobody can hear it either */
     lv_obj_t * hint = label(g_ui.content, 0, 0, 300,
-                             "no peers? the firewall may hold port 7788\n"
-                             "sudo ufw allow 7788/udp",
+                             "no peers? the firewall may hold port 2425\n"
+                             "sudo ufw allow 2425/udp",
                              &pda_font_mono_10, PDA_MSG_SYS);
     lv_obj_set_flex_grow(hint, 0);
     lv_obj_set_height(hint, 26);
@@ -1092,6 +1118,9 @@ static void build_content(void)
     g_ui.name_ta = NULL;
     g_ui.room_ta = NULL;
     g_ui.chan_ta = NULL;
+    g_ui.relay_ta = NULL;
+    g_ui.relay_btn = NULL;
+    g_ui.relay_btn_lbl = NULL;
     g_ui.mesh_canvas = NULL;
     g_ui.bit_hint = NULL;
     g_ui.key_btn_lbl = NULL;
@@ -1121,8 +1150,14 @@ static void build_content(void)
                 lv_obj_t * o = lv_obj_get_child(rp, j);
                 if(!lv_obj_check_type(o, &lv_textarea_class)) continue;
                 lv_obj_update_layout(o);
-                fprintf(stderr, "[field] built: x=%d w=%d content=%d\n",
-                        lv_obj_get_x(o), lv_obj_get_width(o), lv_obj_get_content_width(o));
+                lv_area_t a;
+                lv_obj_get_coords(o, &a);        /* absolute = window client */
+                fprintf(stderr, "[field] built: x=%d y=%d w=%d h=%d content=%d "
+                        "textlen=%d placeholder=%s\n",
+                        a.x1, a.y1, lv_obj_get_width(o), lv_obj_get_height(o),
+                        lv_obj_get_content_width(o),
+                        (int)strlen(lv_textarea_get_text(o)),
+                        lv_textarea_get_placeholder_text(o));
             }
         }
     }
@@ -1166,7 +1201,7 @@ void other_ui_refresh(void)
         }
         else if(!strcmp(key, "bit_scan")) {
             char scan[96] = "off";
-            net_scan_text(scan, sizeof(scan));
+            bit_scan_text(scan, sizeof(scan));
             set_live(i, scan, PDA_MSG_TEXT);
         }
         else if(!strcmp(key, "bit_radio")) {
@@ -1483,6 +1518,34 @@ static void on_save_channel(lv_event_t * e)
 {
     LV_UNUSED(e);
     save_channel(g_ui.chan_ta);
+}
+
+/* the relay URL (spec-nstr-relay §7): the pref is plain text - a
+   syntactically bad URL still saves and the carrier's parser is what says
+   "bad url", nothing in this row pretends to validate more than it does.
+   Clearing the field clears the pref (honest "no relay" when no env var is
+   set); PDA_NSTR_RELAY still wins when it is, so clearing never overrides
+   an operator's explicit URL. */
+static void save_relay(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    prefs_set_str("nstr_relay", (txt && *txt) ? txt : "");
+    if(!txt || !*txt) lv_textarea_set_text(ta, "");
+    flash_saved(g_ui.relay_btn, g_ui.relay_btn_lbl);
+}
+
+void other_ui_on_relay(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    lv_obj_t * ta = lv_event_get_current_target(e);
+    save_relay(ta);
+}
+
+static void on_save_relay(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    save_relay(g_ui.relay_ta);
 }
 
 /* ---------- the identity actions on the User page ---------- */

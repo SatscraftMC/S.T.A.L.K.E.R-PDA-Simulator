@@ -75,6 +75,11 @@ int main(void)
 
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
+    /* a relay that vanishes mid-write must fail the write, not the process:
+       every send() on the new socket paths (and any SSL_write) then comes
+       back as EPIPE instead of SIGPIPE killing us mid-tick. The carrier
+       suites' "app alive after a dead peer" checks rest on this. */
+    signal(SIGPIPE, SIG_IGN);
 
     SDL_AddEventWatch(on_sdl_event, NULL);
 

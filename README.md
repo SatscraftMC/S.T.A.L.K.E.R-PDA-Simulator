@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.6.0-alpha**
+**v0.7.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -29,7 +29,14 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **Mouse & player coordinates** in top-right corner
 - **Traders layer = real bitcoin merchants** from [BTC Map](https://btcmap.org) (OSM `currency:XBT=yes`) — 166 places on Madeira; bag-of-coins icon; tapping opens a card (name, address, lightning/contactless/on-chain/ATM, last checked year) with a **[REQUEST]** button that opens the Wallet for that merchant
 - **Pack-based map system** — regions are self-contained folders, no code change to add new areas
-- **Messages tab: one room, three carriers** (BIT local mesh, FIPS mesh, NET internet); messages go out on all active carriers; incoming tagged by carrier
+- **Messages tab: one room, three carriers** (BIT local mesh, FIPS mesh, NSTR
+  nostr relay); messages go out on all active carriers; incoming tagged by carrier
+- **The internet carrier is a nostr relay** (`NSTR`): one WebSocket connection,
+  TLS on `wss://`, stepped from the UI tick so a slow handshake never stalls it.
+  The relay URL is one setting — `PDA_NSTR_RELAY=<url>` or Other → Connections →
+  Info → **Relay** (env wins, the empty field shows an example) — and the room
+  is scoped on the wire by the standard `t` tag plus a client-side backstop, so
+  a public relay never fills the log with strangers' notes
 - **Carrier picker** in Messages strip — per-carrier send toggle (off still receives); remembered in settings
 - **Newest message at top** of log; scroll back for older lines
 - **Signed messages (nostr NIP-01)**: every chat message is a real signed event —
@@ -87,22 +94,24 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 | Carrier | Transport | Requirements |
 |---------|-----------|--------------|
 | **BIT** | UDP broadcast port 2425 (bitchat channel `#mesh`) | LAN/WiFi; WiFi = radio. No Bluetooth in simulator; real bitchat node via `PDA_BITCHAT_SOCK` bridge |
-| **NET** | TCP relay (`tools/relay.py`) | Relay process: `python3 tools/relay.py` on one machine; `PDA_RELAY_HOST=<ip>` on other |
+| **NSTR** | Nostr relay: WebSocket + TLS (`src/nstr/`) | A relay URL — `PDA_NSTR_RELAY=wss://relay.example.com` or the Connections → Info row; any NIP-01 relay works (`tools/nstr_relay.py` is the local test one) |
 | **FIPS** | `fips` daemon native API (`/run/fips/api.sock`) | Daemon running; without it badge = red `no daemon` |
 
-When no carrier can send: `no carrier up - kept locally (BIT no link, FIPS no daemon, NET no relay)`.
+When no carrier can send: `no carrier up - kept locally (BIT no link, FIPS no daemon, NSTR no relay)`.
 
 All three carriers carry the same wire format: one **signed nostr NIP-01 event**
-per line (`id` = SHA-256 of the canonical serialization, `sig` = BIP-340, the
-display name and the `room`/`chan` as signed tags). Discovery chatter (`hi`,
-`hi-ack`, the relay hello) stays unsigned legacy `{"v":1,"t":...}` — it carries
-no speech and grants no trust. Unsigned events (tests, the relay's ntfy bridge)
-keep the same shape with `pubkey:""` and no `sig` field.
+(`id` = SHA-256 of the canonical serialization, `sig` = BIP-340; the display
+name, the `room` and the same value as `t` (the single-letter key relays index)
+are signed tags). The LAN carriers carry it as one JSON object per line, the
+relay carrier as one WebSocket text message. Discovery chatter (`hi`,
+`hi-ack`) stays unsigned legacy `{"v":1,"t":...}` on the LAN carriers — it
+carries no speech and grants no trust. Unsigned events (tests) keep the same
+shape with `pubkey:""` and no `sig` field.
 
 ## Build
 
 ```bash
-sudo apt install cmake libsdl2-dev libsdl2-image-dev libpng-dev zlib1g-dev nodejs npm libglib2.0-dev
+sudo apt install cmake libsdl2-dev libsdl2-image-dev libpng-dev zlib1g-dev nodejs npm libglib2.0-dev libssl-dev
 ./tools/fetch_deps.sh     # fetches LVGL v9.6.0 + reassembles split map levels
 ./build.sh                # -> build/pda
 ./build/pda               # 800x480 SDL window
@@ -158,7 +167,9 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 | `tools/mesh_netns_test.sh` | mesh over real link (veth + netns); needs root |
 | `tools/ui_test.py` | UI bug hunt: every tab/page, settings, broken prefs, mesh channel, recenter, hard drive |
 | `tools/radio_kill_test.py` | the music player must die with the app: window close, close while paused, SIGINT, SIGKILL, retheme |
-| `tools/relay.py` | NET carrier reference relay |
+| `tools/relay.py` | the old line relay (a standalone tool; nothing points at it any more) |
+| `tools/nstr_relay.py` | the local relay the suites point the app at: WebSocket + NIP-01, `--tls`, control plane on stdin |
+| `tools/wsclient.py` | stdlib WebSocket client the test peers, the screenshots and the live check speak |
 | `tools/bitchat_bridge.py` | bridge local mesh ↔ real bitchat node |
 | `tools/fips_mock.py` | mock fips daemon for testing |
 | `tools/make_screenshots.py` | regenerate docs/screenshots/ |
@@ -168,7 +179,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Status
 
-Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 88 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
+Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — the screens are built and work; they talk to a mock backend that says it is one, and the real Lightning backend is its own spec), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: wallet backend (LDK / NIP-47 / Cashu), camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app). Extras page empty; partially translated — 89 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
 
 ## License
 

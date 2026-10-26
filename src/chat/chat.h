@@ -11,24 +11,31 @@
  * arrived on - lands in the same log, and a message typed here goes out on
  * every medium that is currently up. The carriers ("transports") are:
  *
- *   NET   the internet, through a relay (tools/relay.py)
- *   BIT   the local mesh, no infrastructure (UDP broadcast, port 2425)
- *   FIPS  the FIPS mesh, through the daemon's native datagram API
+ *   NSTR   the internet, through a nostr relay (WebSocket + TLS on wss://,
+ *          src/nstr/ - the LAN carriers below carry the same event as one
+ *          JSON object per line, this one as one WebSocket text message)
+ *   BIT    the local mesh, no infrastructure (UDP broadcast, port 2425)
+ *   FIPS   the FIPS mesh, through the daemon's native datagram API
  *
- * The wire format is a nostr NIP-01 event, one JSON object per line, the
- * same on all three carriers. The display name is a signed tag, so a peer
- * cannot become somebody else by changing its name - the key underneath is
- * the identity and the badge says whether you pressed Trust on it.
+ * The wire format is a nostr NIP-01 event - the identical event on all
+ * three carriers. The display name is a signed tag, so a peer cannot become
+ * somebody else by changing its name - the key underneath is the identity
+ * and the badge says whether you pressed Trust on it.
  *
  *   {"id":"<64 hex sha256 of the serialization>","pubkey":"<64 hex>",
  *    "created_at":1730000000,"kind":1,
- *    "tags":[["room","SECTOR"],["chan","mesh"],["name","Satscraft"]],
+ *    "tags":[["room","SECTOR"],["t","SECTOR"],["chan","mesh"],
+ *            ["name","Satscraft"]],
  *    "content":"anyone got the drop coords?","sig":"<128 hex BIP340>"}
  *
- * Unsigned lines (tests, the relay's ntfy bridge, this device's own
- * identity-failure sends) keep the same shape with "pubkey":"" and no
- * "sig" field. Discovery chatter (hi/hi-ack) stays unsigned legacy
- * {"v":1,"t":...} - it carries no speech and grants no trust.
+ * The "t" tag carries the room as the standard single-letter key relays
+ * index, so a relay subscription can filter on it ({"#t":["SECTOR"]}); the
+ * "room" tag is the one the app itself reads back.
+ *
+ * Unsigned lines (tests, this device's own identity-failure sends) keep the
+ * same shape with "pubkey":"" and no "sig" field. Discovery chatter
+ * (hi/hi-ack) stays unsigned legacy {"v":1,"t":...} - it carries no speech
+ * and grants no trust, and it lives on the LAN carriers only.
  */
 
 #define CHAT_MAX_MSG       300
@@ -72,8 +79,8 @@ typedef enum {
 } chat_carrier_state_t;
 
 typedef struct chat_transport {
-    const char * tag;         /* short label shown in the UI: "NET" */
-    const char * label;       /* long label: "Internet" */
+    const char * tag;         /* short label shown in the UI: "NSTR" */
+    const char * label;       /* long label: "Nostr relay" */
     bool (*connect)(struct chat_transport * t);
     void (*disconnect)(struct chat_transport * t);
     int  (*poll)(struct chat_transport * t);   /* deliver what arrived */
@@ -142,9 +149,9 @@ typedef struct {
    peer directly on that port, not only through the broadcast. */
 void chat_note_peer(const char * addr, int port, const char * name);
 
-/* the subnets the local net walks looking for the other devices
-   ("192.168.1.0/24", or "off") */
-const char * net_scan_text(char * out, size_t outn);
+/* the subnets the local mesh walks looking for the other devices
+   ("192.168.1.0/24", or "off") - the Bitchat page shows it */
+const char * bit_scan_text(char * out, size_t outn);
 
 /* what the bluetooth radio is (address and channel, or "no adapter") */
 const char * bit_info_text(char * out, size_t outn);

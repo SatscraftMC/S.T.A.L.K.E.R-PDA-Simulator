@@ -204,13 +204,19 @@ def main():
     run({"PDA_START_TAB": "6", "PDA_OTHER_PAGE": "0", "PDA_OTHER_SUB": "0"},
         "other-settings.png")
 
-    # the messages tab, with a conversation on it
+    # the messages tab, with a conversation on it: the local relay, a test
+    # peer speaking tools/wsclient.py, and the same unsigned event shape the
+    # suites use (the `t` tag mirrors `room` - the relay filters on it)
     port = free_port()
-    relay = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "relay.py"),
-                               "--host", "127.0.0.1", "--port", str(port)],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    from wsclient import WSClient
+    relay = subprocess.Popen(
+        [sys.executable, os.path.join(ROOT, "tools", "nstr_relay.py"),
+         "--host", "127.0.0.1", "--port", str(port)],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
     time.sleep(1.0)
-    peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+    peer = WSClient(f"ws://127.0.0.1:{port}", timeout=5)
 
     def talk():
         msgs = [("ROOK", "anyone got the drop coords?"),
@@ -219,26 +225,24 @@ def main():
                          "past the broken fence"),
                 ("WUMGUB", "copy that, moving out in ten")]
         for i, (who, what) in enumerate(msgs):
-            # the unsigned event shape: the tests hold no key, and this
-            # picture wants the label from the name tag, not a legacy from
             ts = int(time.time())
-            ser = json.dumps([0, "", ts, 1,
-                              [["room", "SECTOR"], ["name", who]], what],
+            tags = [["room", "SECTOR"], ["t", "SECTOR"], ["name", who]]
+            ser = json.dumps([0, "", ts, 1, tags, what],
                              separators=(",", ":"), ensure_ascii=False)
             eid = hashlib.sha256(ser.encode("utf-8")).hexdigest()
-            peer.sendall((json.dumps({
+            peer.send(json.dumps(["EVENT", {
                 "id": eid, "pubkey": "", "created_at": ts, "kind": 1,
-                "tags": [["room", "SECTOR"], ["name", who]], "content": what},
-                separators=(",", ":")) + "\n").encode())
+                "tags": tags, "content": what}], separators=(",", ":")))
             time.sleep(0.25)
         time.sleep(1.0)
 
-    # PDA_RELAY_HOST is what asks for the uplink at all - with only the
-    # port set the app stays on the local net and the picture comes out
-    # with nobody in the room (net.c, net_init)
-    run({"PDA_START_TAB": "1", "PDA_RELAY_HOST": "127.0.0.1",
-         "PDA_RELAY_PORT": str(port), "PDA_NAME": "Satscraft",
-         "PDA_TEST_SEND": "on my way, ten minutes"},
+    # PDA_NSTR_RELAY is what asks for the uplink at all - one URL, so the
+    # picture can never come out with nobody in the room because the port
+    # was set without the host (the old PDA_RELAY_HOST/PORT pair could)
+    run({"PDA_START_TAB": "1", "PDA_NSTR_RELAY": f"ws://127.0.0.1:{port}",
+         "PDA_NAME": "Satscraft", "PDA_BIT_SCAN": "off",
+         "PDA_TEST_SEND": "on my way, ten minutes",
+         "PDA_TEST_SEND_IN": "4"},
         "messages.png", before=talk)
     peer.close()
     relay.terminate()

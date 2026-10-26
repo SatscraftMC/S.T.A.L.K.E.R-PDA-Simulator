@@ -92,6 +92,7 @@ static const char * const s_en[TR_COUNT] = {
     [TR_KEY_SURE]            = "SURE?",
     [TR_KEY_PASTE]           = "PASTE",
     [TR_KEY_PASTE_HINT]      = "nsec or 64 hex",
+    [TR_RELAY]               = "Relay",
 };
 
 static const char * const s_pl[TR_COUNT] = {
@@ -183,6 +184,7 @@ static const char * const s_pl[TR_COUNT] = {
     [TR_KEY_SURE]            = "PEWNIE?",
     [TR_KEY_PASTE]           = "WKLEJ",
     [TR_KEY_PASTE_HINT]      = "nsec lub 64 hex",
+    [TR_RELAY]               = "Przeka\u017anik",
 };
 
 static int s_lang = TR_LANG_EN;
