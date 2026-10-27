@@ -95,6 +95,13 @@ typedef enum {
     TR_KEY_SURE,
     TR_KEY_PASTE,
     TR_KEY_PASTE_HINT,
+    TR_KEY_REMOTE,
+    TR_PAIR,
+    TR_PAIR_HINT,
+    TR_CODE,
+    TR_CODE_HIDE,
+    TR_UNPAIR,
+    TR_SIGNER_ROW,
     TR_RELAY,
     TR_COUNT
 } tr_id_t;

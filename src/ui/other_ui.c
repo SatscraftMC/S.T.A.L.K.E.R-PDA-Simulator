@@ -10,6 +10,8 @@
 #include "assets/fonts/pda_fonts.h"
 #include "chat/chat.h"
 #include "identity/identity.h"
+#include "identity/nip46.h"
+#include "wallet/qr.h"
 #include "gps.h"
 
 #include <arpa/inet.h>
@@ -111,6 +113,11 @@ static void on_key_toggle(lv_event_t * e);
 static void on_new_click(lv_event_t * e);
 static void other_ui_on_paste(lv_event_t * e);
 static void on_paste_click(lv_event_t * e);
+static void do_pair(lv_obj_t * ta);
+static void other_ui_on_pair(lv_event_t * e);
+static void on_pair_click(lv_event_t * e);
+static void on_code_click(lv_event_t * e);
+static void on_unpair_click(lv_event_t * e);
 static lv_obj_t * save_button(lv_obj_t * row_obj, lv_event_cb_t cb);
 static void on_toggle_click(lv_event_t * e);
 static void on_reset_log(lv_event_t * e);
@@ -166,6 +173,14 @@ typedef struct {
     lv_obj_t * new_btn_lbl;
     lv_obj_t * paste_btn_lbl;
     lv_obj_t * paste_ta;
+
+    /* the remote signer doors under IDENTITY: [PAIR] and its field, [CODE],
+       the state row's [UNPAIR], and the flow-2 QR canvas */
+    lv_obj_t * pair_ta;
+    lv_obj_t * pair_btn_lbl;
+    lv_obj_t * code_btn_lbl;
+    lv_obj_t * unpair_btn_lbl;
+    lv_obj_t * qr_obj;
 } other_ui_t;
 
 static other_ui_t g_ui;
@@ -176,6 +191,19 @@ static other_ui_t g_ui;
 static bool s_show_key = false;
 /* the second press of [NEW] confirms an irreversible regeneration */
 static bool s_new_armed = false;
+/* the pairing doors are two-press too, page-local like s_new_armed: any
+   rebuild starts them over rather than leaving a half-armed confirm */
+static bool s_pair_armed = false;
+static bool s_unpair_armed = false;
+/* whether hide_secrets took the flow-2 QR down - a UI flag only; whether a
+   code is *armed* lives in nip46 (nip46_waiting()), never in a flag here */
+static bool s_code_hidden = false;
+static bool s_boxes_logged = false;
+/* nip46_version() as of the last page build: a bump means an identity
+   changed behind the handlers' backs and the page has to repaint once */
+static unsigned s_seen_version = 0;
+/* the QR pixels the canvas points at - ours to free on the next rebuild */
+static uint32_t * s_qr_px = NULL;
 
 static char s_version[32] = "";
 static char s_gps[64] = "";
@@ -1011,10 +1039,102 @@ static void key_block(void)
     lv_obj_t * b = plain(g_ui.content, lv_pct(100), 34);
     lv_obj_set_flex_grow(b, 0);
     const char * pub = identity_pub_hex();
-    const char * npub = pub[0] ? identity_npub() : tr(TR_KEY_NOT_SET);
-    const char * nsec = pub[0] ? identity_nsec() : tr(TR_KEY_NOT_SET);
+    const char * npub;
+    const char * nsec;
+    if(identity_remote()) {
+        /* one condition, one wording for both lines: while paired the local
+           nsec is not the active key, so the reveal says where it is instead
+           of showing it (identity_nsec() is "" there) */
+        npub = pub[0] ? identity_npub() : tr(TR_KEY_REMOTE);
+        nsec = tr(TR_KEY_REMOTE);
+    }
+    else if(pub[0]) {
+        npub = identity_npub();
+        nsec = identity_nsec();
+    }
+    else {
+        npub = tr(TR_KEY_NOT_SET);
+        nsec = tr(TR_KEY_NOT_SET);
+    }
     label(b, VAL_PAD, 1, 454, npub, &pda_font_mono_10, PDA_MSG_TEXT);
     label(b, VAL_PAD, 17, 454, nsec, &pda_font_mono_10, PDA_MSG_SYS);
+}
+
+/* the state row's palette: decide by palette.h's existing entries only, no
+   new colours - connected green, dead red, waiting/off the system grey */
+static uint32_t signer_colour(nip46_state_t st)
+{
+    switch(st) {
+        case NIP46_PAIRED:      return PDA_CARRIER_UP;
+        case NIP46_UNREACHABLE: return PDA_CARRIER_DOWN;
+        case NIP46_ERROR:       return PDA_CARRIER_DOWN;
+        default:                return PDA_MSG_SYS;
+    }
+}
+
+/* The flow-2 code block, drawn only while a code is armed. The token comes
+   from nip46_show_code()'s own idempotent re-show - the same secret, never a
+   re-mint. If the QR will not render the block shows the raw token instead:
+   the arm stays valid and waiting (honest - the code exists, the picture
+   doesn't), no refusal and no second state. */
+static void signer_code_block(void)
+{
+    char token[NIP46_TOKEN_MAX + 1] = "";
+    char why[224] = "";
+    if(!nip46_show_code(token, sizeof token, why, sizeof why) || !token[0]) return;
+
+    qr_image_t img;
+    if(!qr_render(token, &img)) {
+        if(getenv("PDA_DEBUG"))
+            fprintf(stderr, "[nip46] qr render failed\n");
+        lv_obj_t * t = plain(g_ui.content, lv_pct(100), 40);
+        lv_obj_set_flex_grow(t, 0);
+        label(t, VAL_PAD, 4, 454, token, &pda_font_mono_10, PDA_MSG_TEXT);
+        g_ui.qr_obj = NULL;
+        return;
+    }
+
+    int w = PAGE_W - 16 - 2;                    /* content padding + border */
+    lv_obj_t * box = plain(g_ui.content, w, img.side + 4);
+    lv_obj_set_flex_grow(box, 0);
+    lv_obj_t * cv = lv_canvas_create(box);
+    lv_obj_set_clickable(cv, false);
+    lv_obj_set_style_border_width(cv, 0, LV_PART_MAIN);
+    lv_canvas_set_buffer(cv, img.px, img.side, img.side, LV_COLOR_FORMAT_ARGB8888);
+    s_qr_px = img.px;                           /* freed by the next rebuild */
+    lv_obj_set_size(cv, img.side, img.side);
+    lv_obj_set_pos(cv, (w - img.side) / 2, 2);
+    g_ui.qr_obj = cv;
+    if(s_code_hidden) lv_obj_set_hidden(cv, true);
+}
+
+/* the three new buttons' boxes, from the first tick after a build: the
+   wallet prints from the tick too, because create-time layout is wrong */
+static void log_signer_boxes(void)
+{
+    /* gating rule for this slice's lines: PDA_DEBUG, except `refused:` which
+       is unconditional honesty and these three, which ride PDA_DEBUG_FIELD
+       exactly like the [field] built channel beside them */
+    if(!getenv("PDA_DEBUG_FIELD")) return;
+    if(s_boxes_logged) return;
+    if(!g_ui.pair_btn_lbl && !g_ui.code_btn_lbl && !g_ui.unpair_btn_lbl) return;
+    s_boxes_logged = true;
+
+    struct { lv_obj_t * lbl; const char * name; } boxes[] = {
+        { g_ui.pair_btn_lbl,   "pair button" },
+        { g_ui.code_btn_lbl,   "code button" },
+        { g_ui.unpair_btn_lbl, "unpair button" },
+    };
+    for(size_t i = 0; i < sizeof boxes / sizeof boxes[0]; i++) {
+        if(!boxes[i].lbl) continue;
+        lv_obj_t * btn = lv_obj_get_parent(boxes[i].lbl);
+        if(!btn) continue;
+        lv_obj_update_layout(btn);
+        lv_area_t a;
+        lv_obj_get_coords(btn, &a);
+        fprintf(stderr, "[nip46] %s: x=%d y=%d w=%d h=%d\n", boxes[i].name,
+                a.x1, a.y1, lv_obj_get_width(btn), lv_obj_get_height(btn));
+    }
 }
 
 static void page_user(void)
@@ -1041,15 +1161,22 @@ static void page_user(void)
        a label - it just stops being the identity */
     lv_obj_t * rk = row(g_ui.content, tr(TR_KEY_ROW));
     const char * pub = identity_pub_hex();
-    g_ui.key_btn_lbl = NULL;
-    if(pub[0]) {
-        label(rk, VAL_X + VAL_PAD, VAL_Y, 220, identity_npub(),
-              &pda_font_mono_10, PDA_MSG_TEXT);
+    const char * key_text;
+    uint32_t key_col;
+    if(pub[0]) {                       /* remote with a known key, or local */
+        key_text = identity_npub();
+        key_col = PDA_MSG_TEXT;
+    }
+    else if(identity_remote()) {       /* remote with none: not "not set" */
+        key_text = tr(TR_KEY_REMOTE);  /* a key exists, it is just over there */
+        key_col = PDA_MSG_SYS;
     }
     else {
-        label(rk, VAL_X + VAL_PAD, VAL_Y, 220, tr(TR_KEY_NOT_SET),
-              &pda_font_mono_10, PDA_MSG_SYS);
+        key_text = tr(TR_KEY_NOT_SET);
+        key_col = PDA_MSG_SYS;
     }
+    g_ui.key_btn_lbl = NULL;
+    label(rk, VAL_X + VAL_PAD, VAL_Y, 220, key_text, &pda_font_mono_10, key_col);
     lv_obj_t * kb = key_button(rk, VAL_X + 232, tr(TR_KEY_KEY), on_key_toggle);
     g_ui.key_btn_lbl = lv_obj_get_child(kb, 0);
     if(g_ui.group) lv_group_add_obj(g_ui.group, kb);
@@ -1074,6 +1201,53 @@ static void page_user(void)
     lv_obj_t * pb = key_button(pr, VAL_X + 232, tr(TR_KEY_PASTE), on_paste_click);
     g_ui.paste_btn_lbl = lv_obj_get_child(pb, 0);
     if(g_ui.group) lv_group_add_obj(g_ui.group, pb);
+
+    /* [PAIR] - a bunker:// token validated before anything is saved; two
+       presses like the wallet's paste door, Enter on the field included */
+    lv_obj_t * pair_row = row(g_ui.content, "");
+    lv_obj_t * pair_field = text_field(pair_row, tr(TR_PAIR_HINT));
+    lv_obj_add_event_cb(pair_field, other_ui_on_pair, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, pair_field);
+    g_ui.pair_ta = pair_field;
+    lv_obj_t * pbtn = key_button(pair_row, VAL_X + 232, tr(TR_PAIR), on_pair_click);
+    g_ui.pair_btn_lbl = lv_obj_get_child(pbtn, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, pbtn);
+
+    /* [CODE] - the flow-2 code the phone scans; single press, because
+       nothing destructive happens on an invalid arm */
+    lv_obj_t * code_row = row(g_ui.content, "");
+    lv_obj_t * cbtn = key_button(code_row, VAL_X,
+                                 tr(nip46_waiting() ? TR_CODE_HIDE : TR_CODE),
+                                 on_code_click);
+    g_ui.code_btn_lbl = lv_obj_get_child(cbtn, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, cbtn);
+
+    /* the state row, with [UNPAIR] on it - hidden while off, because there
+       is nothing to unpair and a dead button is a lie */
+    {
+        char why[224];
+        nip46_state_t st = nip46_state(why, sizeof why);
+        char txt[256];
+        snprintf(txt, sizeof txt, "%s: %s", nip46_state_name(st), why);
+        lv_obj_t * sr = row(g_ui.content, tr(TR_SIGNER_ROW));
+        lv_obj_t * sv = label(sr, VAL_X + VAL_PAD, VAL_Y, 223, txt,
+                              &pda_font_mono_10, signer_colour(st));
+        if(g_ui.n_live < 16) {
+            g_ui.live[g_ui.n_live] = sv;
+            snprintf(g_ui.live_key[g_ui.n_live], sizeof g_ui.live_key[0], "%s",
+                     "nip46_state");
+            g_ui.n_live++;
+        }
+        lv_obj_t * ubtn = key_button(sr, VAL_X + 232, tr(TR_UNPAIR), on_unpair_click);
+        g_ui.unpair_btn_lbl = lv_obj_get_child(ubtn, 0);
+        if(g_ui.group) lv_group_add_obj(g_ui.group, ubtn);
+        lv_obj_set_hidden(ubtn, st == NIP46_OFF);
+    }
+
+    /* the code itself, last of the IDENTITY block: the row spec places the
+       state row directly below the two doors, and the doors plus that row
+       have to stay above the fold for the code to be usable at all */
+    if(nip46_waiting()) signer_code_block();
 
     section(g_ui.content, "MESSAGES");
     toggle_row(g_ui.content, "Show carrier tag", "show_carrier");
@@ -1103,6 +1277,7 @@ static void build_content(void)
     lv_anim_delete_all();
     lv_kill_tree(g_ui.content);
     lv_obj_clean(g_ui.content);
+    if(s_qr_px) { free(s_qr_px); s_qr_px = NULL; }
     g_ui.n_live = 0;
     g_ui.n_tog = 0;
     g_ui.sec_no = 0;
@@ -1127,6 +1302,15 @@ static void build_content(void)
     g_ui.new_btn_lbl = NULL;
     g_ui.paste_btn_lbl = NULL;
     g_ui.paste_ta = NULL;
+    g_ui.pair_ta = NULL;
+    g_ui.pair_btn_lbl = NULL;
+    g_ui.code_btn_lbl = NULL;
+    g_ui.unpair_btn_lbl = NULL;
+    g_ui.qr_obj = NULL;
+    s_pair_armed = false;        /* a rebuilt page starts the pairing doors */
+    s_unpair_armed = false;      /* over, never half-armed */
+    s_code_hidden = false;       /* a rebuild re-renders the QR while armed */
+    s_boxes_logged = false;
 
     if(g_ui.page == PAGE_SETTINGS) page_settings(g_ui.sub);
     else if(g_ui.page == PAGE_CONNECTIONS) {
@@ -1161,6 +1345,11 @@ static void build_content(void)
             }
         }
     }
+
+    /* whatever identity state this build painted is the one the tick should
+       compare against - so a rebuild for any other reason can never earn a
+       second, redundant one */
+    s_seen_version = nip46_version();
 }
 
 /* ---------- the live values ---------- */
@@ -1270,6 +1459,16 @@ void other_ui_refresh(void)
             if(n > 0) snprintf(b, sizeof(b), "%d", n);
             else snprintf(b, sizeof(b), "-");
             set_live(i, b, n > 0 ? PDA_MSG_TEXT : PDA_MSG_SYS);
+        }
+        else if(!strcmp(key, "nip46_state")) {
+            /* reason and token ride one string: a background flip must not
+               wipe the [PAIR] field, reset two-press flags or drop the
+               reveal, so it moves on this label alone */
+            char why[224];
+            nip46_state_t st = nip46_state(why, sizeof why);
+            char txt[256];
+            snprintf(txt, sizeof txt, "%s: %s", nip46_state_name(st), why);
+            set_live(i, txt, signer_colour(st));
         }
         else if(!strcmp(key, "sys_version")) set_live(i, s_version, PDA_MSG_TEXT);
         else if(!strcmp(key, "sys_gps")) set_live(i, s_gps, PDA_MSG_TEXT);
@@ -1399,7 +1598,15 @@ static void on_reset_log(lv_event_t * e)
 static void other_ui_tick(lv_timer_t * timer)
 {
     LV_UNUSED(timer);
+    /* the flow-2 wait runs off this timer, not off the button: the Other
+       panel exists for the app's lifetime, so a code showing on the User
+       page keeps being heard while another tab is on screen */
+    nip46_poll();
     other_ui_refresh();
+    /* a commit, unpair, cancel or a first user_pub fill happening outside a
+       handler is an identity change, not a reason change: repaint once */
+    if(nip46_version() != s_seen_version) build_content();
+    log_signer_boxes();
     /* the mesh moves: new peers come and go */
     if(g_ui.page == PAGE_CONNECTIONS && g_ui.sub == 1) draw_mesh();
 }
@@ -1622,15 +1829,150 @@ static void on_paste_click(lv_event_t * e)
     do_paste(g_ui.paste_ta);
 }
 
+/* ---------- the remote signer doors ---------- */
+
+/* A door conflict: honest refusal, nothing written. Decisions key on files
+   and functions - nip46_paired() / nip46_waiting() - never on the state the
+   row happens to be displaying, so a junk session and an armed code each
+   take their own branch. */
+static void signer_refuse(lv_obj_t * field, lv_obj_t * lbl, const char * restore,
+                          const char * reason)
+{
+    nip46_note_refusal(reason);
+    fprintf(stderr, "[nip46] refused: %s\n", reason);
+    if(field) lv_textarea_set_text(field, "");
+    flash_btn(lbl, tr(TR_FAILED), restore, PDA_CARRIER_DOWN);
+}
+
+/* [PAIR]: the field's Enter maps 1:1 onto this - first press arms, second
+   accepts, exactly like the button (Enter never bypasses the confirm). */
+static void do_pair(lv_obj_t * ta)
+{
+    if(!ta) return;
+    const char * txt = lv_textarea_get_text(ta);
+    if(!txt || !*txt) { lv_textarea_set_text(ta, ""); return; }
+
+    if(nip46_paired()) {
+        signer_refuse(ta, g_ui.pair_btn_lbl, tr(TR_PAIR), "unpair first");
+        return;
+    }
+    if(nip46_waiting()) {
+        signer_refuse(ta, g_ui.pair_btn_lbl, tr(TR_PAIR), "cancel the code first");
+        return;
+    }
+    if(!s_pair_armed) {
+        s_pair_armed = true;
+        if(g_ui.pair_btn_lbl) lv_label_set_text(g_ui.pair_btn_lbl, tr(TR_KEY_SURE));
+        return;
+    }
+    s_pair_armed = false;
+
+    char why[224];
+    if(!nip46_parse(txt, why, sizeof why)) {          /* refused, nothing written */
+        lv_textarea_set_text(ta, "");
+        flash_btn(g_ui.pair_btn_lbl, tr(TR_FAILED), tr(TR_PAIR), PDA_CARRIER_DOWN);
+        return;
+    }
+    if(!nip46_pair(txt, why, sizeof why)) {           /* a save that failed */
+        lv_textarea_set_text(ta, "");
+        flash_btn(g_ui.pair_btn_lbl, tr(TR_FAILED), tr(TR_PAIR), PDA_CARRIER_DOWN);
+        return;
+    }
+    /* the session file was written, so this is the success path even when
+       the signer itself could not be reached (the state row says which) */
+    lv_textarea_set_text(ta, "");
+    build_content();
+    flash_btn(g_ui.pair_btn_lbl, tr(TR_SAVED), tr(TR_PAIR), PDA_CARRIER_UP);
+}
+
+static void other_ui_on_pair(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    do_pair(lv_event_get_current_target(e));
+}
+
+static void on_pair_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    do_pair(g_ui.pair_ta);
+}
+
+/* [CODE]: single press. Unarmed -> arm and rebuild (the build renders the
+   QR); armed with the QR hidden by the tab-leave -> show the same secret
+   again with no rebuild; armed and visible -> cancel. */
+static void on_code_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+
+    if(!nip46_waiting()) {
+        if(nip46_paired()) {
+            nip46_note_refusal("unpair first");
+            fprintf(stderr, "[nip46] refused: unpair first\n");
+            flash_btn(g_ui.code_btn_lbl, tr(TR_FAILED), tr(TR_CODE), PDA_CARRIER_DOWN);
+            return;
+        }
+        char token[NIP46_TOKEN_MAX + 1], why[224];
+        if(!nip46_show_code(token, sizeof token, why, sizeof why)) {
+            flash_btn(g_ui.code_btn_lbl, tr(TR_FAILED), tr(TR_CODE), PDA_CARRIER_DOWN);
+            return;
+        }
+        build_content();
+        flash_btn(g_ui.code_btn_lbl, tr(TR_SAVED), tr(TR_CODE_HIDE), PDA_CARRIER_UP);
+        return;
+    }
+
+    if(s_code_hidden) {
+        s_code_hidden = false;
+        if(g_ui.qr_obj) lv_obj_set_hidden(g_ui.qr_obj, false);
+        if(g_ui.code_btn_lbl)
+            lv_label_set_text(g_ui.code_btn_lbl, tr(TR_CODE_HIDE));
+        return;
+    }
+
+    nip46_cancel();
+    build_content();
+    flash_btn(g_ui.code_btn_lbl, tr(TR_SAVED), tr(TR_CODE), PDA_CARRIER_UP);
+}
+
+/* [UNPAIR] (two presses): what it runs is decided by the files, not the
+   displayed state - a session (paired or junk) takes the full unpair, a
+   pending code on its own is just a cancel */
+static void on_unpair_click(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    lv_obj_t * lbl = g_ui.unpair_btn_lbl;
+    if(!s_unpair_armed) {
+        s_unpair_armed = true;
+        if(lbl) lv_label_set_text(lbl, tr(TR_KEY_SURE));
+        return;
+    }
+    s_unpair_armed = false;
+    if(nip46_has_session()) nip46_unpair();
+    else nip46_cancel();
+    s_show_key = false;          /* the old key's reveal belongs to it no more */
+    build_content();
+    flash_btn(g_ui.unpair_btn_lbl, tr(TR_SAVED), tr(TR_UNPAIR), PDA_CARRIER_UP);
+}
+
 /* The shell calls this when the Other tab is left (set_tab only hides the
    panel, so the clear has to happen where it is hidden): the rule is that
    the nsec is on screen only immediately after an explicit press, on the
    visible User page, until anything else happens. */
 void other_ui_hide_secrets(void)
 {
-    if(!s_show_key) return;
-    s_show_key = false;
-    if(g_ui.content) build_content();
+    if(s_show_key) {
+        s_show_key = false;
+        if(g_ui.content) build_content();
+    }
+    /* A credential-bearing image is a secret, and it goes down on tab-leave
+       too - the object, not a rebuild, so armed state survives. The clause
+       runs *after* any rebuild above, so leaving the tab ends hidden + CODE
+       either way (a rebuild would have re-shown it). */
+    if(nip46_waiting()) {
+        s_code_hidden = true;
+        if(g_ui.qr_obj) lv_obj_set_hidden(g_ui.qr_obj, true);
+        if(g_ui.code_btn_lbl) lv_label_set_text(g_ui.code_btn_lbl, tr(TR_CODE));
+    }
 }
 
 /* ---------- build ---------- */
@@ -1641,6 +1983,11 @@ lv_obj_t * other_ui_create(lv_obj_t * parent, lv_group_t * group)
     g_ui.group = group;
     s_show_key = false;          /* a fresh panel: nothing is revealed */
     s_new_armed = false;
+    s_pair_armed = false;
+    s_unpair_armed = false;
+    s_code_hidden = false;
+    s_boxes_logged = false;
+    s_seen_version = nip46_version();
 
     lv_obj_t * root = lv_obj_create(parent);
     lv_obj_set_pos(root, 0, 0);

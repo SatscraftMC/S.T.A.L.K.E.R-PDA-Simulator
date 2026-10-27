@@ -94,6 +94,13 @@ static const char * const s_en[TR_COUNT] = {
     [TR_KEY_SURE]            = "SURE?",
     [TR_KEY_PASTE]           = "PASTE",
     [TR_KEY_PASTE_HINT]      = "nsec or 64 hex",
+    [TR_KEY_REMOTE]          = "held by the remote signer",
+    [TR_PAIR]                = "PAIR",
+    [TR_PAIR_HINT]           = "bunker:// token",
+    [TR_CODE]                = "CODE",
+    [TR_CODE_HIDE]           = "HIDE",
+    [TR_UNPAIR]              = "UNPAIR",
+    [TR_SIGNER_ROW]          = "remote signer",
     [TR_RELAY]               = "Relay",
 };
 
@@ -188,6 +195,13 @@ static const char * const s_pl[TR_COUNT] = {
     [TR_KEY_SURE]            = "PEWNIE?",
     [TR_KEY_PASTE]           = "WKLEJ",
     [TR_KEY_PASTE_HINT]      = "nsec lub 64 hex",
+    [TR_KEY_REMOTE]          = "przechowuje je zdalny podpisuj\u0105cy",
+    [TR_PAIR]                = "PARUJ",
+    [TR_PAIR_HINT]           = "token bunker://",
+    [TR_CODE]                = "KOD",
+    [TR_CODE_HIDE]           = "UKRYJ",
+    [TR_UNPAIR]              = "ODPARUJ",
+    [TR_SIGNER_ROW]          = "zdalny podpisuj\u0105cy",
     [TR_RELAY]               = "Przeka\u017anik",
 };
 

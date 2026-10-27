@@ -450,6 +450,20 @@ static bool emit_event(char * out, size_t outn, const char * id, const char * pu
     return true;
 }
 
+/* The unsigned event as NIP-46's sign_event parameter: the object chat's
+   serialization is built from, handed to identity so a remote signer can
+   compute the id itself. Key order is irrelevant - the signer parses it. */
+static bool unsigned_event_json(char * out, size_t outn, long created_at,
+                                const char * tags_json, const char * content)
+{
+    char e_content[1536];
+    json_escape(content, e_content, sizeof e_content);
+    int w = snprintf(out, outn, "{\"created_at\":%ld,\"kind\":1,\"tags\":%s,"
+                     "\"content\":\"%s\"}", created_at, tags_json, e_content);
+    if(w < 0 || (size_t)w >= outn) { out[0] = 0; return false; }
+    return true;
+}
+
 /* true when the last chat_event_build() went out signed (chat_send records
    that honestly in its own log row: a real pubkey and CHAT_SIG_OK) */
 static bool s_last_built_signed = false;
@@ -478,18 +492,30 @@ bool chat_event_build(char * out, size_t outn, char * id_out,
                       e_room, e_t, e_chan, e_name);
     if(tw < 0 || (size_t)tw >= sizeof(tags)) return false;
 
-    char ser[2048], id[65], sig[129];
+    /* the remote backend's key gate comes first: false means it already set
+       the withheld line's why, and the message never reaches the wire */
+    if(!identity_prepare()) return false;
+
+    char ser[2048], ujson[4096], id[65], sig[129];
     const char * pub = identity_pub_hex();
 
     if(pub[0] &&
        chat_event_serialize(ser, sizeof(ser), pub, created_at, 1, tags, text) &&
-       identity_event_id(ser, id) &&
-       identity_sign_id(id, sig) &&
+       unsigned_event_json(ujson, sizeof(ujson), created_at, tags, text) &&
+       identity_sign_event(ser, ujson, id, sig) &&
        emit_event(out, outn, id, pub, created_at, tags, text, sig)) {
         s_last_built_signed = true;
         snprintf(id_out, 65, "%s", id);
         return true;
     }
+
+    /* While the identity is remote there is no unsigned shape to fall
+       through to: B2 (b) withholds it (whatever the cause - no reachable
+       user-pubkey, a sign failure, an id mismatch or a pump expiry), and
+       identity_last_failure() carries the honest reason for the line below.
+       A purely local buffer/240-cap failure leaves it empty and the line
+       keeps its exact wording - a local overflow is not the signer's fault. */
+    if(identity_remote()) { out[0] = 0; id_out[0] = 0; return false; }
 
     /* no usable key (init failed, or the sign refused): the unsigned
        shape, same call, one caller - hashing still gives the line a real
@@ -566,7 +592,18 @@ bool chat_send(const char * text)
 
     if(getenv("PDA_DEBUG")) fprintf(stderr, "[chat] sent: %s\n", text);
     if(!built) {
-        chat_system("could not build the message - kept locally, not sent");
+        /* the signer is to blame only when identity actually said so; an
+           empty reason means a local build failure and keeps the wording
+           slice A has always printed */
+        const char * why2 = identity_last_failure();
+        char line[CHAT_TEXT_MAX + 320];
+        if(why2[0])
+            snprintf(line, sizeof line,
+                     "could not build the message - kept locally, not sent (%s)", why2);
+        else
+            snprintf(line, sizeof line,
+                     "could not build the message - kept locally, not sent");
+        chat_system(line);
     }
     else if(!any) {
         char line[CHAT_TEXT_MAX + 64];

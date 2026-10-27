@@ -173,7 +173,11 @@ bool chat_event_serialize(char * out, size_t outn, const char * pubkey_hex,
    builds the unsigned shape instead (pubkey "", no sig field): same call,
    one caller, no second code path. Returns false only if serialization,
    the id hash or the buffers fail - then chat_send keeps the message
-   locally with a make_id() row id and sends nothing half-built. */
+   locally with a make_id() row id and sends nothing half-built.
+   One exception: if the identity is remote, an unusable key or a failed
+   sign withholds the message instead of going unsigned (a paired device
+   never puts an unsigned line on the wire) - identity_prepare()'s reason
+   rides the kept-locally line. */
 bool chat_event_build(char * out, size_t outn, char * id_out /* 65 */,
                       long created_at, const char * text);
 

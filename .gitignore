@@ -19,3 +19,7 @@ music/**/*.mp3
 # never read by the app, deleted with its STATUS.md Blockers line when the
 # live testing is done
 .keys
+# the live NIP-46 test's credential (a real bunker:// token): harness-only,
+# never read by the app, deleted with its STATUS.md Blockers line when the
+# live testing is done
+.keys.nip46

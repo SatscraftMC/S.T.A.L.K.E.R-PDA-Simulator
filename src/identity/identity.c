@@ -1,6 +1,7 @@
 #include "identity/identity.h"
 #include "identity/bech32.h"
 #include "identity/sha256.h"
+#include "identity/nip46.h"
 #include "identity/state_file.h"
 #include "ui/prefs.h"
 #include "chat/chat.h"
@@ -19,19 +20,30 @@
 /* The device key: identity.nsec next to the prefs file, generated on the
    first run, never in the repo, never in a log.
 
-   Every sign/hash call goes through one internal signer table (the seam the
-   remote signer of build-order.md #4 will plug into). Callers only ever see
-   identity.h - chat.c and the User page never know which backend answered.
-   This slice wires the local libsecp256k1 backend and nothing else: no
-   bunker strings, no relay path, no fake "remote" UI. */
+   Every sign/hash call goes through one internal signer table - the seam
+   build-order.md #4's remote signer plugged into. Callers only ever see
+   identity.h: chat.c and the User page never know which backend answered.
+
+   Two backends now. event_id and verify_id stay local for both (hashing and
+   verifying need no key), and the table's sign_ev is the local one. Which
+   backend signs is a branch *inside this file's dispatcher*, per call -
+   nip46_* when identity_remote(), the table otherwise. Pairing changes
+   state, never wiring: nothing is swapped or reconnected on pair/unpair.
+   This file is still the only one that mentions the table (the slice A
+   checkable rule the test greps for). */
 
 typedef struct {
     bool (*event_id)(const char * serialization, char * hex65);
-    bool (*sign_id)(const char * id_hex, char * sig_hex);
+    bool (*sign_ev)(const char * id_hex, const char * unsigned_json, char * sig_hex);
     bool (*verify_id)(const char * pub_hex, const char * id_hex, const char * sig_hex);
 } id_signer_t;
 
 static id_signer_t s_signer;              /* this file is the only one that knows it */
+
+/* identity_prepare()'s one-shot failure reason: set when a prepare or a sign
+   fails, cleared the moment either succeeds, so chat_send's withheld line
+   reads a why exactly when the signer is to blame - never a stale one */
+static char s_last_fail[224] = "";
 
 static secp256k1_context * s_ctx = NULL;
 static secp256k1_keypair    s_kp;
@@ -190,8 +202,10 @@ static bool local_event_id(const char * serialization, char * hex65)
     return true;
 }
 
-static bool local_sign_id(const char * id_hex, char * sig_hex)
+/* unsigned_json is the remote backend's payload; the local key never sees it */
+static bool local_sign_ev(const char * id_hex, const char * unsigned_json, char * sig_hex)
 {
+    (void)unsigned_json;
     if(!s_ok || !id_hex || !sig_hex) return false;
     uint8_t msg[32];
     if(strlen(id_hex) != 64) return false;
@@ -234,8 +248,13 @@ bool identity_init(void)
     /* the table is wired even when the key is unusable: hashing and verify
        do not need our key, and the remote backend lands on the same seam */
     s_signer.event_id = local_event_id;
-    s_signer.sign_id = local_sign_id;
+    s_signer.sign_ev = local_sign_ev;
     s_signer.verify_id = local_verify_id;
+
+    /* the remote backend's own boot: the vector gate, the leftover-arm
+       cleanup and identity.bunker's read - before the local key load below,
+       so a junk session already shows its honest error face at first paint */
+    nip46_init();
 
     if(!s_ctx) {
         s_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
@@ -324,19 +343,51 @@ bool identity_init(void)
     return true;
 }
 
+/* While remote the bunker's user key *is* this device's key (B4 (a)). With a
+   session but no known key yet, the accessors return "" exactly like today's
+   not-set state: the local key is not the active identity, so it must not be
+   handed out as if it were - the state row's reason says why. */
 const char * identity_pub_hex(void)
 {
+    if(identity_remote()) {
+        const char * u = nip46_user_pub();
+        return u[0] ? u : "";
+    }
     return s_pub_hex;
 }
 
+/* the remote key's npub, cached by hex so a repeated read costs a strcmp */
+static char s_remote_pub[65] = "";
+static char s_remote_npub[64] = "";
+
 const char * identity_npub(void)
 {
+    if(identity_remote()) {
+        const char * u = nip46_user_pub();
+        if(u[0]) {
+            if(strcmp(s_remote_pub, u) != 0) {
+                snprintf(s_remote_pub, sizeof s_remote_pub, "%s", u);
+                if(!identity_npub_from_pub_hex(u, s_remote_npub, sizeof s_remote_npub))
+                    s_remote_npub[0] = 0;
+            }
+            if(s_remote_npub[0]) return s_remote_npub;
+        }
+        return "";
+    }
     return s_npub;
 }
 
 const char * identity_nsec(void)
 {
-    return s_nsec;
+    /* one guard: the local nsec is not the active identity mid-pair, so the
+       reveal must not hand it out. The User page renders the remote label
+       in its place. Unpaired, exactly today's behaviour. */
+    return identity_remote() ? "" : s_nsec;
+}
+
+bool identity_remote(void)
+{
+    return nip46_paired();
 }
 
 /* one parse function for the file and for the paste field: bech32 nsec… or
@@ -365,6 +416,14 @@ bool identity_import_nsec(const char * nsec_or_hex)
 {
     if(!s_ctx && !identity_init()) return false;
 
+    /* the key door itself refuses while remote, whatever the UI asked: the
+       check sits before parse_secret so *any* press yields the honest line,
+       never a parse error, and nothing is written either way */
+    if(identity_remote()) {
+        chat_system("key not imported: unpair the remote signer first");
+        return false;
+    }
+
     uint8_t sec[32];
     if(!parse_secret(nsec_or_hex, sec)) {
         chat_system("key not imported: that is not an nsec or a 64-hex secret key");
@@ -386,6 +445,11 @@ bool identity_import_nsec(const char * nsec_or_hex)
 bool identity_regenerate(void)
 {
     if(!s_ctx && !identity_init()) return false;
+
+    if(identity_remote()) {
+        chat_system("new key not made: unpair the remote signer first");
+        return false;
+    }
 
     uint8_t sec[32];
     bool made = false;
@@ -416,11 +480,63 @@ bool identity_event_id(const char * serialization, char * hex65)
     return fn(serialization, hex65);
 }
 
-bool identity_sign_id(const char * id_hex, char * sig_hex)
+/* The one dispatcher: hash first (both backends need the id out anyway),
+   then pick the backend per call - never a table swap, so pairing changes
+   state and not wiring. */
+bool identity_prepare(void)
 {
-    bool (*fn)(const char *, char *) =
-        s_signer.sign_id ? s_signer.sign_id : local_sign_id;
-    return fn(id_hex, sig_hex);
+    if(!identity_remote()) { s_last_fail[0] = 0; return true; }
+
+    char why[224] = "";
+    if(!nip46_ensure_pub(why, sizeof why)) {
+        snprintf(s_last_fail, sizeof s_last_fail, "%s",
+                 why[0] ? why : "internal error");
+        return false;
+    }
+    s_last_fail[0] = 0;
+    return true;
+}
+
+bool identity_sign_event(const char * serialization, const char * unsigned_json,
+                         char * id_hex, char * sig_hex)
+{
+    if(!serialization || !id_hex || !sig_hex) return false;
+    id_hex[0] = 0;
+    sig_hex[0] = 0;
+
+    if(!s_signer.event_id(serialization, id_hex)) {
+        snprintf(s_last_fail, sizeof s_last_fail, "%s", "internal error");
+        return false;
+    }
+
+    if(identity_remote()) {
+        char why[224] = "";
+        char sig[129];
+        if(!nip46_sign(unsigned_json, id_hex, sig, why, sizeof why)) {
+            snprintf(s_last_fail, sizeof s_last_fail, "%s",
+                     why[0] ? why : "internal error");
+            id_hex[0] = 0;
+            return false;
+        }
+        memcpy(sig_hex, sig, sizeof sig);
+        s_last_fail[0] = 0;
+        return true;
+    }
+
+    bool (*fn)(const char *, const char *, char *) =
+        s_signer.sign_ev ? s_signer.sign_ev : local_sign_ev;
+    if(!fn(id_hex, unsigned_json, sig_hex)) {
+        snprintf(s_last_fail, sizeof s_last_fail, "%s", "internal error");
+        id_hex[0] = 0;
+        return false;
+    }
+    s_last_fail[0] = 0;
+    return true;
+}
+
+const char * identity_last_failure(void)
+{
+    return s_last_fail;
 }
 
 bool identity_verify_id(const char * pub_hex, const char * id_hex, const char * sig_hex)

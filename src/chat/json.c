@@ -171,16 +171,18 @@ bool json_get(const char * obj, const char * key, char * out, size_t outn)
         p = skip_ws(p);
         if(*p == 0) break;
 
-        char val[512];
-        val[0] = 0;
-        if(*p == '"') p = read_string(p + 1, val, sizeof(val));
-        else p = read_raw(p, val, sizeof(val));
+        /* read straight into the caller's buffer: an intermediate 512-byte
+           scratch silently *truncated* any longer value, and a truncated
+           NIP-44 payload then failed the id recheck as "a broken id".
+           Non-matching keys reset the buffer, so the failure contract
+           (out[0] == '\0') is unchanged for every existing caller. */
+        if(*p == '"') p = read_string(p + 1, out, outn);
+        else p = read_raw(p, out, outn);
 
-        if(strcmp(kbuf, key) == 0) {
-            snprintf(out, outn, "%s", val);
-            return true;
-        }
+        if(strcmp(kbuf, key) == 0) return true;
+        out[0] = 0;
     }
+    out[0] = 0;
     return false;
 }
 

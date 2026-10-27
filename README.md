@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.8.0-alpha**
+**v0.9.0-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -52,6 +52,14 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
 - **`nstr` key row (Settings → User)**: the device's `npub` with `[KEY]` (reveal
   npub + nsec, only while asked), `[NEW]` (two-press regenerate) and `[PASTE]`
   (import an `nsec`, bech32 or 64-hex, validated before anything is saved).
+- **Remote signer (nostr NIP-46)**: the nsec never has to live on the device.
+  `[PAIR]` takes a `bunker://` token from Amber / nsec.app, `[CODE]` shows a
+  `nostrconnect://` QR the phone scans, and while paired the signer's user key
+  *is* the device identity \u2014 chat, Trust and the verified badge behave exactly
+  as above, every signature is a relay round trip, and the local
+  `identity.nsec` sits untouched until `[UNPAIR]`. A signer that does not
+  answer withholds the message (kept locally, never sent unsigned). From
+  `spec-nip46-signer.md`.
 - **Mesh map** on Other → Connections → Bitchat — this device in center, peers around with names & lines; 5-min peer timeout
 - **Local mesh uses broadcast + direct peer unicast** — subnet sweep finds peers, messages sent directly to known peers (bypasses firewall/AP broadcast drops); discovery row shows subnet
 - **Firewall**: needs UDP 2425 (`sudo ufw allow 2425/udp`); Bitchat page warns when no peers answer
@@ -184,7 +192,7 @@ Madeira: 166 places, 25 KB. Whole planet: ~30k places, 4.5 MB.
 
 ## Status
 
-Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — with two backends: the mock that says it is one, and **NIP-47 NWC** against your own wallet service, from `spec-nip47-wallet.md`), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app); a second wallet backend (LDK / NIP-60 Cashu) stays LATER behind the same seam. Extras page empty; partially translated — 91 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
+Map screen, Messages tab (3 carriers), Radio tab (MP3 player), Wallet tab (request/QR, send, history — with two backends: the mock that says it is one, and **NIP-47 NWC** against your own wallet service, from `spec-nip47-wallet.md`), Other tab (all settings work) functional. Camera is the last visible stub tab (Contacts is built: trusted keys + session speakers, from `spec-nostr-identity.md`). TODO: camera, real nav stack, GPIO/evdev input, Pi port (DRM/KMS + systemd boot-to-app); a second wallet backend (LDK / NIP-60 Cashu) stays LATER behind the same seam. Extras page empty; partially translated — 98 keys EN + PL in the `TR_` table, while the Camera stub panel, the map's flag words, the wallet backend's own messages and the chat/identity SYSTEM log lines are still English.
 
 ## License
 
