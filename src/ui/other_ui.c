@@ -236,7 +236,17 @@ static lv_obj_t * label(lv_obj_t * parent, int x, int y, int w, const char * tex
     lv_obj_t * l = lv_label_create(parent);
     lv_label_set_text(l, text);
     lv_obj_set_pos(l, x, y);
-    if(w > 0) lv_obj_set_width(l, w);
+    if(w > 0) {
+        lv_obj_set_width(l, w);
+        /* LVGL writes the dots only when the text is taller than the
+           label itself - and an auto-height label always grows to fit
+           its wrapped text, so the dots never come and the row below
+           clips the second line to a sliver (the npub did exactly
+           this). The height is what says "one line, no more", the same
+           way wallet_ui's line_dot() does it. A caller that wants more
+           lines than one sets its own height after this. */
+        lv_obj_set_height(l, lv_font_get_line_height(font));
+    }
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
     lv_obj_set_style_text_color(l, lv_color_hex(color), LV_PART_MAIN);
@@ -1089,7 +1099,12 @@ static void signer_code_block(void)
             fprintf(stderr, "[nip46] qr render failed\n");
         lv_obj_t * t = plain(g_ui.content, lv_pct(100), 40);
         lv_obj_set_flex_grow(t, 0);
-        label(t, VAL_PAD, 4, 454, token, &pda_font_mono_10, PDA_MSG_TEXT);
+        lv_obj_t * tok = label(t, VAL_PAD, 4, 454, token, &pda_font_mono_10,
+                               PDA_MSG_TEXT);
+        /* three full lines fit the 40px block (4 + 33); anything past
+           that gets the dots instead of a fourth line sliced in half by
+           the block's edge */
+        lv_obj_set_height(tok, 3 * lv_font_get_line_height(&pda_font_mono_10));
         g_ui.qr_obj = NULL;
         return;
     }
