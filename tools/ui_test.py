@@ -1663,8 +1663,8 @@ def test_wallet():
 # Messages frames sit at (6, 32) with 1 px border + 8 px padding, so their
 # lists start at x=15, y=75. The Other page's content column is at x=306,
 # y=PANEL_Y+38 with the same border+padding, so its rows start at 315/81 -
-# IDENTITY heading (16), then Name, Room, nstr, [NEW], [PASTE] (18 each,
-# 2 px flex gaps).
+# IDENTITY heading (16), then Name, Room, nstr (editable, w/ [KEY]+[PASTE]),
+# [NEW], [PAIR], [CODE], state (18 each, 2 px flex gaps).
 PANEL_Y = 34
 LIST_X = 6 + 1 + 8
 LIST_Y = PANEL_Y + 32 + 1 + 8
@@ -1676,12 +1676,13 @@ def _row_center(top):
 
 NSTR_TOP = CONTENT_Y + 16 + 2 + 18 + 2 + 18 + 2        # after the heading
 NEW_TOP = NSTR_TOP + 18 + 2
-PASTE_TOP = NEW_TOP + 18 + 2
+# the separate import row is gone (v0.9.2): the nstr row is the editor now
+PAIR_TOP = NEW_TOP + 18 + 2
 
-KEY_BTN = (CONTENT_X + 382 + 26, _row_center(NSTR_TOP))    # [KEY], right col
-NEW_BTN = (CONTENT_X + 150 + 26, _row_center(NEW_TOP))     # [NEW], value col
-PASTE_FIELD = (CONTENT_X + 150 + 94, _row_center(PASTE_TOP))
-PASTE_BTN = (CONTENT_X + 382 + 26, _row_center(PASTE_TOP))
+KEY_BTN = (CONTENT_X + 326 + 26, _row_center(NSTR_TOP))    # [KEY], between field and [PASTE]
+NEW_BTN = (CONTENT_X + 150 + 26, _row_center(NEW_TOP))      # [NEW], value col
+PASTE_FIELD = (CONTENT_X + 150 + 94, _row_center(NSTR_TOP))
+PASTE_BTN = (CONTENT_X + 382 + 26, _row_center(NSTR_TOP))
 # the [KEY] block opens right under the nstr row: two lines, x = content+5
 BLOCK_BOX = (CONTENT_X + 5, CONTENT_X + 140,
              NEW_TOP, NEW_TOP + 34)
@@ -3306,7 +3307,7 @@ def drag(x0, y0, x1, y1, steps=12):
 # the coordinate channel for this slice: the three [nip46] button-box lines
 # printed from the first tick after a build, with slice A's constants as the
 # fallback the spec allows
-PAIR_TOP = PASTE_TOP + 18 + 2
+PAIR_TOP = NEW_TOP + 18 + 2
 CODE_TOP = PAIR_TOP + 18 + 2
 STATE_TOP = CODE_TOP + 18 + 2
 
@@ -3621,7 +3622,7 @@ def test_nip46():
             press("code button", code_fallback)
             wait_for_log(logpath, r"\[nip46\] state: waiting", 15)
             time.sleep(3.0)
-            drag(CONTENT_X + 60, 420, CONTENT_X + 60, 140)
+            drag(CONTENT_X + 60, 420, CONTENT_X + 60, 160)
             time.sleep(1.0)
             tok = decode_qr(shot("nip46_code"))
             note(tok is not None and tok.startswith("nostrconnect://"),
@@ -3663,7 +3664,7 @@ def test_nip46():
             click_once(cb[0] + cb[2] // 2, cb[1] + cb[3] // 2)
             wait_for_log(logpath, r"\[nip46\] state: waiting", 15)
             time.sleep(3.0)
-            drag(CONTENT_X + 60, 420, CONTENT_X + 60, 140)
+            drag(CONTENT_X + 60, 420, CONTENT_X + 60, 160)
             time.sleep(1.0)
             tok2 = decode_qr(shot("nip46_code2"))
             note(tok2 is not None and "?" in tok2,
@@ -3723,8 +3724,8 @@ def test_nip46():
             time.sleep(0.4)
             type_text("definitely not a key")
             time.sleep(0.4)
-            # [PASTE] keeps slice A's own row coordinate
-            click_once(CONTENT_X + 382 + 26, _row_center(PASTE_TOP))
+            # [PASTE] lives on the nstr row now (v0.9.2)
+            click_once(*PASTE_BTN)
             data = wait_for_log(logpath,
                                 r"key not imported: unpair the remote signer first", 12)
             note("key not imported: unpair the remote signer first" in data,
@@ -4240,7 +4241,7 @@ def decode_arm(logpath, shot_name):
     if not wait_for_log(logpath, r"\[nip46\] state: waiting", 15):
         return None
     time.sleep(3.0)
-    drag(CONTENT_X + 60, 420, CONTENT_X + 60, 140)
+    drag(CONTENT_X + 60, 420, CONTENT_X + 60, 160)
     time.sleep(1.0)
     tok = decode_qr(shot(shot_name))
     if not tok or "?" not in tok:

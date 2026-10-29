@@ -1,6 +1,6 @@
 # S.T.A.L.K.E.R PDA Simulator
 
-**v0.9.1-alpha**
+**v0.9.2-alpha**
 
 A handheld communicator in the spirit of the STALKER PDA: an offline map, a group chat that works over the local mesh, the FIPS mesh and the internet, contacts and a Lightning wallet.
 
@@ -49,9 +49,11 @@ The UI is **LVGL v9** (C) in an 800x480 window. This repository is the **desktop
   kept in `contacts.conf`). A message row shows the green verified mark only
   when the signature checked out **and** the key is one you Trusted; tap a row
   for its full `npub` to compare against the other device's User page.
-- **`nstr` key row (Settings → User)**: the device's `npub` with `[KEY]` (reveal
-  npub + nsec, only while asked), `[NEW]` (two-press regenerate) and `[PASTE]`
-  (import an `nsec`, bech32 or 64-hex, validated before anything is saved).
+- **`nstr` key row (Settings → User)**: the row is the editor now — the current
+  `npub` is its greyed placeholder, a typed nsec + `[PASTE]` (or Enter) imports
+  it (bech32 or 64-hex, validated before anything is saved), `[KEY]` reveals the
+  full npub + nsec, `[NEW]` (two-press) regenerates. The long input scrolls
+  sideways instead of wrapping.
 - **Remote signer (nostr NIP-46)**: the nsec never has to live on the device.
   `[PAIR]` takes a `bunker://` token from Amber / nsec.app, `[CODE]` shows a
   `nostrconnect://` QR the phone scans, and while paired the signer's user key

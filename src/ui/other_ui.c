@@ -74,7 +74,9 @@
                                text of a field starts inside its box (the box's
                                border is 1px and its padding 4px) */
 #define VAL_Y        3      /* the value sits on the row's baseline, with the
-                               name on the left */
+                                name on the left */
+#define KEY_FIELD_W  172     /* the nstr key row keeps room for [KEY] + [PASTE] */
+#define KEY_BTN_X    (VAL_X + KEY_FIELD_W + 4)   /* 326: [KEY] between field and [PASTE] */
 #define BACK_W       800
 #define BACK_H       452
 /* the mesh map on the Bitchat page */
@@ -309,26 +311,25 @@ static lv_obj_t * live_row(lv_obj_t * parent, const char * name, const char * ke
 
 /* a text field in a row: the cursor only shows while the field has the
    focus, so an empty field shows its placeholder whole */
-static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
+static lv_obj_t * text_field_w(lv_obj_t * row_obj, const char * placeholder, int w)
 {
     lv_obj_t * ta = lv_textarea_create(row_obj);
     lv_textarea_set_one_line(ta, true);
-    /* one_line makes the label as wide as the text and gives it a minimum of
-       100% of the field - a minimum that is bigger than the field, so the
-       field ends up the size of its text and the first letter is cut off */
+    /* one_line sizes the label to its text with the field as the minimum, so
+       text wider than the field scrolls sideways under the cursor. Pinning
+       the label's width to the field instead made it wrap at the edge: a long
+       key dropped onto a second line the 17 px field cannot show (the overflow
+       bug, fixed in v0.9.2). */
     lv_obj_t * tl = lv_obj_get_child(ta, 0);
     if(tl) {
-        lv_obj_set_width(tl, lv_pct(100));
-        lv_obj_set_style_min_width(tl, 0, 0);
         /* the text sits at the left of the field: the theme would centre it */
         lv_obj_set_style_text_align(tl, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
     }
-    lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_LEFT, LV_PART_TEXTAREA_PLACEHOLDER);
     lv_textarea_set_placeholder_text(ta, placeholder);
     lv_obj_set_pos(ta, VAL_X, 0);
-    lv_obj_set_size(ta, FIELD_W, FIELD_H);
+    lv_obj_set_size(ta, w, FIELD_H);
     /* and it must not shrink either */
-    lv_obj_set_style_min_width(ta, FIELD_W, LV_PART_MAIN);
+    lv_obj_set_style_min_width(ta, w, LV_PART_MAIN);
     lv_obj_set_style_bg_color(ta, lv_color_hex(PDA_CHAT_INPUT), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
@@ -344,6 +345,12 @@ static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
     lv_obj_set_style_pad_left(ta, VAL_PAD - 1, LV_PART_MAIN);
     lv_caret_init(ta);
     return ta;
+}
+
+/* the ordinary-sized field: FIELD_W, so the old callers keep their shape */
+static lv_obj_t * text_field(lv_obj_t * row_obj, const char * placeholder)
+{
+    return text_field_w(row_obj, placeholder, FIELD_W);
 }
 
 /* a small square toggle */
@@ -1172,29 +1179,28 @@ static void page_user(void)
     g_ui.room_btn = save_button(r2, on_save_room);
     g_ui.room_btn_lbl = lv_obj_get_child(g_ui.room_btn, 0);
 
-    /* the device's nstr key: the key underneath the name. The name stays
-       a label - it just stops being the identity */
+    /* the nstr key row is the editor now (v0.9.2): the current npub is the
+       field's placeholder (grey), a typed nsec + [PASTE] (or Enter) replaces
+       it, [KEY] reveals the full block. The separate import row is gone - the
+       key changed where it lives. */
     lv_obj_t * rk = row(g_ui.content, tr(TR_KEY_ROW));
-    const char * pub = identity_pub_hex();
-    const char * key_text;
-    uint32_t key_col;
-    if(pub[0]) {                       /* remote with a known key, or local */
-        key_text = identity_npub();
-        key_col = PDA_MSG_TEXT;
-    }
-    else if(identity_remote()) {       /* remote with none: not "not set" */
-        key_text = tr(TR_KEY_REMOTE);  /* a key exists, it is just over there */
-        key_col = PDA_MSG_SYS;
-    }
-    else {
-        key_text = tr(TR_KEY_NOT_SET);
-        key_col = PDA_MSG_SYS;
-    }
-    g_ui.key_btn_lbl = NULL;
-    label(rk, VAL_X + VAL_PAD, VAL_Y, 220, key_text, &pda_font_mono_10, key_col);
-    lv_obj_t * kb = key_button(rk, VAL_X + 232, tr(TR_KEY_KEY), on_key_toggle);
+    const char * hint;
+    if(identity_pub_hex()[0])           hint = identity_npub();
+    else if(identity_remote())           hint = tr(TR_KEY_REMOTE);
+    else                                hint = tr(TR_KEY_PASTE_HINT);
+    if(!hint || !hint[0])              hint = tr(TR_KEY_NOT_SET);
+    lv_obj_t * kta = text_field_w(rk, hint, KEY_FIELD_W);
+    lv_obj_add_event_cb(kta, other_ui_on_paste, LV_EVENT_READY, NULL);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, kta);
+    g_ui.paste_ta = kta;
+
+    lv_obj_t * kb = key_button(rk, KEY_BTN_X, tr(TR_KEY_KEY), on_key_toggle);
     g_ui.key_btn_lbl = lv_obj_get_child(kb, 0);
     if(g_ui.group) lv_group_add_obj(g_ui.group, kb);
+
+    lv_obj_t * pb = key_button(rk, VAL_X + 232, tr(TR_KEY_PASTE), on_paste_click);
+    g_ui.paste_btn_lbl = lv_obj_get_child(pb, 0);
+    if(g_ui.group) lv_group_add_obj(g_ui.group, pb);
 
     /* the reveal: up right after the press, gone on the next rebuild */
     if(s_show_key) key_block();
@@ -1205,17 +1211,6 @@ static void page_user(void)
     lv_obj_t * nb = key_button(nr, VAL_X, tr(TR_KEY_NEW), on_new_click);
     g_ui.new_btn_lbl = lv_obj_get_child(nb, 0);
     if(g_ui.group) lv_group_add_obj(g_ui.group, nb);
-
-    /* [PASTE] - an nsec (bech32 or 64 hex) validated before anything is
-       saved; invalid input is an honest error and saves nothing */
-    lv_obj_t * pr = row(g_ui.content, "");
-    lv_obj_t * pta = text_field(pr, tr(TR_KEY_PASTE_HINT));
-    lv_obj_add_event_cb(pta, other_ui_on_paste, LV_EVENT_READY, NULL);
-    if(g_ui.group) lv_group_add_obj(g_ui.group, pta);
-    g_ui.paste_ta = pta;
-    lv_obj_t * pb = key_button(pr, VAL_X + 232, tr(TR_KEY_PASTE), on_paste_click);
-    g_ui.paste_btn_lbl = lv_obj_get_child(pb, 0);
-    if(g_ui.group) lv_group_add_obj(g_ui.group, pb);
 
     /* [PAIR] - a bunker:// token validated before anything is saved; two
        presses like the wallet's paste door, Enter on the field included */
